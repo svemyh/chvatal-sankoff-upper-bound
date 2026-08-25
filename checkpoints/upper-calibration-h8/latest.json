@@ -1,0 +1,23 @@
+{
+  "certificate": {
+    "apply_seconds": 0.022349084028974175,
+    "bound_approx": 0.8262799834025526,
+    "failing_state": -1,
+    "feasible": true,
+    "lambda_denominator": 4294967296,
+    "lambda_floor": 1468157974,
+    "lambda_numerator": 1468159907,
+    "ratio_width_units": 1933,
+    "raw_max": 98526439613042806,
+    "target_pass": true
+  },
+  "iteration": 203,
+  "schema_version": 1,
+  "slot": 1,
+  "state_file": "state-1.npy",
+  "state_max": 67108864,
+  "state_min": 992299,
+  "state_sha256": "48c9b399a30f0bae01999d435af73f9a799a7e2a5c6d83aca69a280419dd2714",
+  "sweep_id": "1d1cb58020afd47f649e19e0756acb14491be7bed7cf457c42680a537a6178ed",
+  "timestamp": "2026-08-24T01:49:28Z"
+}

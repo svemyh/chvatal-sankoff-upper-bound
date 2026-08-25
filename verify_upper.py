@@ -1,0 +1,536 @@
+#!/usr/bin/env python3
+"""Read-only exact replay of the binary Chvatal--Sankoff upper certificate."""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import math
+import os
+from pathlib import Path
+import sys
+import time
+from fractions import Fraction
+
+
+ROOT = Path(__file__).resolve().parent
+VENV_PYTHON = ROOT.parent / ".venv" / "bin" / "python"
+
+# The requested entry point is ``python3 verify_upper.py`` while the campaign's
+# numerical dependencies live in ../.venv.  Re-exec there without writing
+# bytecode or changing any certificate artifact.
+sys.dont_write_bytecode = True
+try:
+    import numba
+    import numpy as np
+except ModuleNotFoundError:
+    if os.environ.get("VERIFY_UPPER_REEXEC") == "1" or not VENV_PYTHON.is_file():
+        raise
+    environment = os.environ.copy()
+    environment["VERIFY_UPPER_REEXEC"] = "1"
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    os.execve(
+        VENV_PYTHON,
+        [str(VENV_PYTHON), "-B", str(Path(__file__).resolve()), *sys.argv[1:]],
+        environment,
+    )
+
+
+WEIGHT_SCALE = 1 << 32
+REJECT = np.uint32(0xFFFFFFFF)
+UINT64_MAX = (1 << 64) - 1
+PAPER_SHA256 = "d812c50d68c1b7e6f7e63eb5537cc470aaad37e1cc93aa3c1d969dfc53398778"
+CERTIFICATE_SHA256 = "523fb826c7c7e18310cb1625a04d375017ed228bef911063634022560ff012ff"
+
+EXPECTED = {
+    "calibration": {
+        "history": 8,
+        "state_count": 6_419_109,
+        "columns": 30,
+        "graph_identity": "4c2514a4066e745d3da90a074cd1dbc5978eecd3259d795c00fd2f9313b8d084",
+        "states_sha256": "c1288560c59890d29e181d445fb419ac639378001c9182ea7d5a21706320936f",
+        "transitions_sha256": "95d566129119c52aa003c1df4601cbfe172032854c942b8572e1e16df5d8bc87",
+        "state_sha256": "48c9b399a30f0bae01999d435af73f9a799a7e2a5c6d83aca69a280419dd2714",
+        "iteration": 203,
+        "witness_scale": 1 << 26,
+        "lambda_numerator": 1_468_159_907,
+        "lambda_floor": 1_468_157_974,
+        "ratio_width_units": 1_933,
+        "state_min": 992_299,
+        "state_max": 67_108_864,
+    },
+    "record": {
+        "history": 10,
+        "state_count": 400_253_317,
+        "columns": 38,
+        "graph_identity": "e4db7c10b0b55060c3a9beff010583a593b4c24bc13600ecb219b933a2806f7a",
+        "states_sha256": "defc127da935708620977efddda218378322d9d23921ac3453c9f7a56ff5f59b",
+        "transitions_sha256": "611a32eb44baa93fbe5231aa8ddaf9aa690da4e4b2a049ff54226ce3e265aba5",
+        "state_sha256": "e146da77cfb3f37bd00cdfe864abad17741d29a628bf13bd75a0195b91361436",
+        "iteration": 113,
+        "witness_scale": 1 << 31,
+        "lambda_numerator": 1_464_651_560,
+        "lambda_floor": 1_464_649_541,
+        "ratio_width_units": 2_019,
+        "state_min": 9_834_007,
+        "state_max": 2_147_483_648,
+    },
+}
+
+
+class VerificationError(RuntimeError):
+    pass
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition:
+        raise VerificationError(message)
+
+
+def sha256_file(path: Path, chunk_size: int = 8 << 20) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(chunk_size):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def canonical_json(payload: dict) -> str:
+    return json.dumps(payload, sort_keys=True, separators=(",", ":"))
+
+
+def graph_identity(manifest: dict) -> str:
+    payload = {
+        "history": manifest["history"],
+        "state_count": manifest["state_count"],
+        "columns": manifest["columns"],
+        "states_sha256": manifest["states_sha256"],
+        "transitions_sha256": manifest["transitions_sha256"],
+    }
+    return hashlib.sha256(canonical_json(payload).encode()).hexdigest()
+
+
+def snapshot(paths: list[Path]) -> dict[str, tuple[int, int, int]]:
+    result = {}
+    for path in paths:
+        stat = path.stat()
+        result[str(path)] = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+    return result
+
+
+def upward_weights(history: int, z: Fraction) -> tuple[np.ndarray, dict]:
+    integers = []
+    errors = []
+    for _character in (0, 1):
+        for padding in range(-(history - 1), history):
+            absolute = abs(padding)
+            exact = (
+                z ** (history + 1) / (1 - z)
+                if absolute == history - 1
+                else z ** (absolute + 2)
+            )
+            integer = (exact.numerator * WEIGHT_SCALE + exact.denominator - 1) // exact.denominator
+            integers.append(integer)
+            errors.append(Fraction(integer, WEIGHT_SCALE) - exact)
+    return np.asarray(integers, dtype=np.uint64), {
+        "maximum": max(errors),
+        "sum": sum(errors, Fraction()),
+    }
+
+
+@numba.njit(parallel=True)
+def apply_integer_operator(transitions, weights, witness, output):
+    for state in numba.prange(transitions.shape[0]):
+        total = np.uint64(0)
+        for column in range(transitions.shape[1]):
+            successor = transitions[state, column]
+            if successor != REJECT:
+                total += weights[column] * np.uint64(witness[successor])
+        output[state] = total
+
+
+@numba.njit
+def scan_integer_ratios(raw, witness):
+    maximum_ceiling = np.uint64(0)
+    minimum_floor = np.uint64(UINT64_MAX)
+    for state in range(raw.size):
+        value = np.uint64(witness[state])
+        total = raw[state]
+        ceiling = (total + value - np.uint64(1)) // value
+        floor = total // value
+        if ceiling > maximum_ceiling:
+            maximum_ceiling = ceiling
+        if floor < minimum_floor:
+            minimum_floor = floor
+    failing = np.int64(-1)
+    for state in range(raw.size):
+        if raw[state] > maximum_ceiling * np.uint64(witness[state]):
+            failing = state
+            break
+    return maximum_ceiling, minimum_floor, failing
+
+
+def exact_log_interval(value: Fraction, terms: int) -> tuple[Fraction, Fraction]:
+    require(value > 0, "log input must be positive")
+    y = (value - 1) / (value + 1)
+    y_squared = y * y
+    power = y
+    partial = Fraction()
+    for index in range(terms):
+        partial += power / (2 * index + 1)
+        power *= y_squared
+    partial *= 2
+    remainder = 2 * abs(power) / ((2 * terms + 1) * (1 - y_squared))
+    return (partial - remainder, partial) if y < 0 else (partial, partial + remainder)
+
+
+def exact_target_decision(
+    z: Fraction,
+    lambda_numerator: int,
+    target_numerator: int,
+    target_denominator: int,
+) -> tuple[bool, int]:
+    lam = Fraction(lambda_numerator, WEIGHT_SCALE)
+    require(0 < 2 * z < 1 and 0 < lam < 1, "normalization domain failure")
+    for terms in (8, 16, 32, 64, 128, 256, 512):
+        x_lower, x_upper = exact_log_interval(2 * z, terms)
+        lambda_lower, lambda_upper = exact_log_interval(lam, terms)
+        lower = 2 * target_denominator * x_lower - target_numerator * lambda_upper
+        upper = 2 * target_denominator * x_upper - target_numerator * lambda_lower
+        if lower >= 0:
+            return True, terms
+        if upper < 0:
+            return False, terms
+    raise VerificationError("exact log intervals did not separate target")
+
+
+def authenticate_graph(graph_dir: Path, expected: dict) -> tuple[dict, np.memmap]:
+    manifest = json.loads((graph_dir / "graph.json").read_text())
+    require(manifest["kind"] == "lueker-upper-dense-graph", "unexpected graph kind")
+    for key in ("history", "state_count", "columns"):
+        require(manifest[key] == expected[key], f"graph {key} mismatch")
+    for prefix in ("states", "transitions"):
+        path = graph_dir / manifest[f"{prefix}_file"]
+        require(path.stat().st_size == manifest[f"{prefix}_bytes"], f"{prefix} size mismatch")
+        digest = sha256_file(path)
+        require(digest == manifest[f"{prefix}_sha256"], f"{prefix} manifest hash mismatch")
+        require(digest == expected[f"{prefix}_sha256"], f"{prefix} expected hash mismatch")
+    require(graph_identity(manifest) == expected["graph_identity"], "graph identity mismatch")
+    transitions = np.memmap(
+        graph_dir / manifest["transitions_file"],
+        dtype=np.dtype(manifest["transition_dtype"]),
+        mode="r",
+        shape=(manifest["state_count"], manifest["columns"]),
+    )
+    return manifest, transitions
+
+
+def authenticate_checkpoint(checkpoint_dir: Path, expected: dict, graph_id: str):
+    parameters = json.loads((checkpoint_dir / "parameters.json").read_text())
+    parameter_keys = (
+        "schema_version",
+        "kind",
+        "kernel_version",
+        "history",
+        "state_count",
+        "columns",
+        "graph_identity",
+        "z_numerator",
+        "z_denominator",
+        "weight_scale",
+        "witness_scale",
+        "target_numerator",
+        "target_denominator",
+    )
+    immutable = {key: parameters[key] for key in parameter_keys}
+    require(
+        hashlib.sha256(canonical_json(immutable).encode()).hexdigest()
+        == parameters["parameter_sha256"],
+        "checkpoint parameter hash mismatch",
+    )
+    require(parameters["graph_identity"] == graph_id, "checkpoint graph identity mismatch")
+    for key in ("history", "state_count", "columns", "witness_scale"):
+        require(parameters[key] == expected[key], f"checkpoint {key} mismatch")
+    require(parameters["weight_scale"] == WEIGHT_SCALE, "weight scale mismatch")
+    require(
+        (parameters["z_numerator"], parameters["z_denominator"]) == (3209, 10000),
+        "z mismatch",
+    )
+    latest = json.loads((checkpoint_dir / "latest.json").read_text())
+    require(latest["iteration"] == expected["iteration"], "checkpoint iteration mismatch")
+    state_path = checkpoint_dir / latest["state_file"]
+    digest = sha256_file(state_path)
+    require(digest == latest["state_sha256"], "latest state hash mismatch")
+    require(digest == expected["state_sha256"], "expected state hash mismatch")
+    witness = np.load(state_path, allow_pickle=False, mmap_mode="r")
+    require(witness.dtype == np.uint32, "witness dtype mismatch")
+    require(witness.shape == (expected["state_count"],), "witness shape mismatch")
+    return parameters, latest, witness
+
+
+def certify(label: str, graph_dir: Path, checkpoint_dir: Path) -> dict:
+    expected = EXPECTED[label]
+    print(f"[{label}] authenticating graph and checkpoint", flush=True)
+    manifest, transitions = authenticate_graph(graph_dir, expected)
+    parameters, latest, witness = authenticate_checkpoint(
+        checkpoint_dir, expected, expected["graph_identity"]
+    )
+    z = Fraction(parameters["z_numerator"], parameters["z_denominator"])
+    weights, errors = upward_weights(expected["history"], z)
+    require(weights.size == expected["columns"], "weight column count mismatch")
+    worst_row = int(weights.sum()) * expected["witness_scale"]
+    require(worst_row + expected["witness_scale"] - 1 <= UINT64_MAX, "uint64 preflight failed")
+
+    raw = np.empty(expected["state_count"], dtype=np.uint64)
+    numba.set_num_threads(min(18, numba.config.NUMBA_NUM_THREADS))
+    started = time.perf_counter()
+    apply_integer_operator(transitions, weights, witness, raw)
+    lambda_numerator, lambda_floor, failing_state = scan_integer_ratios(raw, witness)
+    elapsed = time.perf_counter() - started
+    result = {
+        "history": expected["history"],
+        "states": expected["state_count"],
+        "lambda_numerator": int(lambda_numerator),
+        "lambda_denominator": WEIGHT_SCALE,
+        "lambda_floor": int(lambda_floor),
+        "ratio_width_units": int(lambda_numerator - lambda_floor),
+        "failing_state": int(failing_state),
+        "state_min": int(witness.min()),
+        "state_max": int(witness.max()),
+        "raw_max": int(raw.max()),
+        "maximum_full_row_sum": worst_row,
+        "weight_error_maximum": errors["maximum"],
+        "weight_error_sum": errors["sum"],
+        "scan_seconds": elapsed,
+        "state_sha256": latest["state_sha256"],
+        "graph_identity": graph_identity(manifest),
+    }
+    for key in (
+        "lambda_numerator",
+        "lambda_floor",
+        "ratio_width_units",
+        "state_min",
+        "state_max",
+    ):
+        require(result[key] == expected[key], f"{label} {key} mismatch")
+    require(result["failing_state"] == -1, f"{label} feasibility failure")
+    print(
+        f"[{label}] exact feasibility PASS: lambda={result['lambda_numerator']}/2^32 "
+        f"width={result['ratio_width_units']} scan={elapsed:.2f}s",
+        flush=True,
+    )
+    return result
+
+
+def verify_log_and_rescale() -> dict:
+    entries = {8: [], 10: []}
+    for line in (ROOT / "LOG.md").read_text().splitlines():
+        if " upper-sweep `" not in line:
+            continue
+        record = json.loads(line.split("`", 2)[1])
+        if record.get("history") not in entries:
+            continue
+        sweep_id = record.pop("sweep_id")
+        require(
+            hashlib.sha256(canonical_json(record).encode()).hexdigest() == sweep_id,
+            "sweep ID mismatch",
+        )
+        record["sweep_id"] = sweep_id
+        entries[record["history"]].append(record)
+    for history, final_iteration in ((8, 203), (10, 113)):
+        records = entries[history]
+        require(
+            [record["iteration"] for record in records] == list(range(1, final_iteration + 1)),
+            f"h={history} iteration sequence mismatch",
+        )
+        require(len({record["sweep_id"] for record in records}) == len(records), "duplicate sweep ID")
+        require(all(record["feasible"] for record in records), f"h={history} infeasible log entry")
+
+    h10 = entries[10]
+    for index in range(1, 100):
+        require(
+            h10[index]["source_state_sha256"] == h10[index - 1]["state_sha256"],
+            "low-precision state chain mismatch",
+        )
+    for index in range(101, 113):
+        require(
+            h10[index]["source_state_sha256"] == h10[index - 1]["state_sha256"],
+            "high-precision state chain mismatch",
+        )
+    require(all(record["witness_scale"] == 1 << 26 for record in h10[:100]), "Q26 segment mismatch")
+    require(all(record["witness_scale"] == 1 << 31 for record in h10[100:]), "Q31 segment mismatch")
+
+    parent_latest = json.loads((ROOT / "checkpoints/upper-h10/latest.json").read_text())
+    child_parameters = json.loads((ROOT / "checkpoints/upper-h10-q31/parameters.json").read_text())
+    require(parent_latest["iteration"] == child_parameters["parent_iteration"] == 100, "rescale iteration mismatch")
+    require(
+        parent_latest["state_sha256"] == child_parameters["parent_state_sha256"],
+        "rescale parent hash mismatch",
+    )
+    require(child_parameters["rescale_factor"] == 32, "rescale factor mismatch")
+
+    parent = np.load(
+        ROOT / "checkpoints/upper-h10" / parent_latest["state_file"],
+        allow_pickle=False,
+        mmap_mode="r",
+    )
+    final_latest = json.loads((ROOT / "checkpoints/upper-h10-q31/latest.json").read_text())
+    final_state = np.load(
+        ROOT / "checkpoints/upper-h10-q31" / final_latest["state_file"],
+        allow_pickle=False,
+        mmap_mode="r",
+    )
+    with Path(final_state.filename).open("rb") as handle:
+        header = handle.read(final_state.offset)
+    digest = hashlib.sha256(header)
+    for start in range(0, parent.size, 4_000_000):
+        scaled = (parent[start : start + 4_000_000].astype(np.uint64) * 32).astype(np.uint32)
+        digest.update(scaled.tobytes(order="C"))
+    child_hash = digest.hexdigest()
+    require(child_hash == h10[100]["source_state_sha256"], "rescaled child hash mismatch")
+    return {"h8_sweeps": 203, "h10_sweeps": 113, "rescaled_child_sha256": child_hash}
+
+
+def verify_benchmark() -> dict:
+    benchmark = json.loads((ROOT / "upper-benchmark-results.json").read_text())
+    require(benchmark["required_reserve_bytes"] == 20 * (1 << 30), "reserve mismatch")
+    require(benchmark["selected_maximum_history"] == 10, "selected history mismatch")
+    selected = next(item for item in benchmark["results"] if item["history"] == 10)
+    require(selected["reserve_pass"], "h=10 reserve gate failed")
+    require(selected["graph_identity"] == EXPECTED["record"]["graph_identity"], "benchmark graph mismatch")
+    require(selected["state_count"] == EXPECTED["record"]["state_count"], "benchmark count mismatch")
+    require(
+        selected["minimum_measured_available_bytes"] >= benchmark["required_reserve_bytes"],
+        "measured reserve violated",
+    )
+    rejected = benchmark["first_rejected_scale"]
+    require(rejected["history"] == 11, "first rejected history mismatch")
+    require(rejected["status"] == "REJECTED_BUILDER_PREFLIGHT", "h=11 rejection mismatch")
+    require(
+        rejected["reserve_deficit_bytes"]
+        == benchmark["required_reserve_bytes"] - rejected["projected_headroom_bytes"],
+        "reserve deficit arithmetic mismatch",
+    )
+    require(not (ROOT / "upper_graphs/h11").exists(), "rejected h=11 graph unexpectedly exists")
+    return {
+        "selected_history": 10,
+        "minimum_available_bytes": selected["minimum_measured_available_bytes"],
+        "h11_reserve_deficit_bytes": rejected["reserve_deficit_bytes"],
+    }
+
+
+def verify_saved_certificate(record: dict) -> None:
+    path = ROOT / "upper-h10-certificate.json"
+    require(sha256_file(path) == CERTIFICATE_SHA256, "saved certificate hash mismatch")
+    saved = json.loads(path.read_text())
+    checks = {
+        "status": "PASS",
+        "feasible": True,
+        "failing_state": -1,
+        "target_pass": True,
+        "iteration": 113,
+        "graph_identity": record["graph_identity"],
+        "state_sha256": record["state_sha256"],
+        "lambda_numerator": record["lambda_numerator"],
+        "lambda_denominator": WEIGHT_SCALE,
+        "lambda_floor": record["lambda_floor"],
+        "ratio_width_units": record["ratio_width_units"],
+        "stored_state_error_units": 0,
+        "integer_sum_error_units": 0,
+        "feasibility_comparison_error_units": 0,
+        "overflow_preflight": True,
+    }
+    for key, value in checks.items():
+        require(saved[key] == value, f"saved certificate {key} mismatch")
+    require(
+        Fraction(saved["weight_error_max_numerator"], saved["weight_error_max_denominator"])
+        == record["weight_error_maximum"],
+        "saved maximum weight error mismatch",
+    )
+    require(
+        Fraction(saved["weight_error_sum_numerator"], saved["weight_error_sum_denominator"])
+        == record["weight_error_sum"],
+        "saved total weight error mismatch",
+    )
+
+
+def main() -> int:
+    if len(sys.argv) != 1:
+        raise VerificationError("verify_upper.py takes no arguments")
+    artifacts = [
+        ROOT / "sources/papers/lueker-2009.pdf",
+        ROOT / "upper-benchmark-results.json",
+        ROOT / "upper-h10-certificate.json",
+        ROOT / "LOG.md",
+    ]
+    for directory in (
+        ROOT / "upper_graphs/h8",
+        ROOT / "upper_graphs/h10",
+        ROOT / "checkpoints/upper-calibration-h8",
+        ROOT / "checkpoints/upper-h10",
+        ROOT / "checkpoints/upper-h10-q31",
+    ):
+        artifacts.extend(sorted(path for path in directory.iterdir() if path.is_file()))
+    before = snapshot(artifacts)
+    started = time.perf_counter()
+
+    print("[source] authenticating frozen Lueker paper", flush=True)
+    require(sha256_file(ROOT / "sources/papers/lueker-2009.pdf") == PAPER_SHA256, "paper hash mismatch")
+    benchmark = verify_benchmark()
+    calibration = certify(
+        "calibration", ROOT / "upper_graphs/h8", ROOT / "checkpoints/upper-calibration-h8"
+    )
+    calibration_pass, calibration_terms = exact_target_decision(
+        Fraction(3209, 10000), calibration["lambda_numerator"], 826280, 1_000_000
+    )
+    require(calibration_pass, "published 0.826280 calibration target failed")
+
+    record = certify("record", ROOT / "upper_graphs/h10", ROOT / "checkpoints/upper-h10-q31")
+    internal_pass, internal_terms = exact_target_decision(
+        Fraction(3209, 10000), record["lambda_numerator"], 826279, 1_000_000
+    )
+    claimed_pass, claimed_terms = exact_target_decision(
+        Fraction(3209, 10000), record["lambda_numerator"], 824443, 1_000_000
+    )
+    next_lower_pass, next_lower_terms = exact_target_decision(
+        Fraction(3209, 10000), record["lambda_numerator"], 824442, 1_000_000
+    )
+    require(internal_pass, "checkpoint target failed")
+    require(claimed_pass, "claimed 0.824443 target failed")
+    require(not next_lower_pass, "unexpected 0.824442 target passage")
+    require(824443 < 826280, "record comparison is not strict")
+    verify_saved_certificate(record)
+    log = verify_log_and_rescale()
+
+    after = snapshot(artifacts)
+    require(after == before, "verifier modified a certificate artifact")
+    elapsed = time.perf_counter() - started
+    bound_approx = 2 * math.log(2 * 0.3209) / math.log(record["lambda_numerator"] / WEIGHT_SCALE)
+    summary = {
+        "status": "PASS",
+        "read_only": True,
+        "published_calibration": "gamma_2 <= 826280/1000000",
+        "record_bound": "gamma_2 <= 824443/1000000 < 826280/1000000",
+        "record_bound_approximation": bound_approx,
+        "calibration_log_terms": calibration_terms,
+        "internal_target_log_terms": internal_terms,
+        "record_target_log_terms": claimed_terms,
+        "next_lower_target_log_terms": next_lower_terms,
+        "calibration": calibration,
+        "record": record,
+        "benchmark": benchmark,
+        "log": log,
+        "wall_seconds": elapsed,
+    }
+    print(json.dumps(summary, indent=2, sort_keys=True, default=str), flush=True)
+    print("PASS: exact feasible witness proves gamma_2 <= 0.824443 < 0.826280", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except VerificationError as error:
+        print(f"FAIL: {error}", file=sys.stderr, flush=True)
+        raise SystemExit(1)

@@ -1,0 +1,21 @@
+{
+  "columns": 38,
+  "created_at": "2026-08-24T05:26:36Z",
+  "graph_identity": "e4db7c10b0b55060c3a9beff010583a593b4c24bc13600ecb219b933a2806f7a",
+  "history": 10,
+  "kernel_version": "upper-fixed-v1",
+  "kind": "lueker-upper-fixed-checkpoint",
+  "parameter_sha256": "129327d01e780cdb056970a013eca78a7aa800fbf607b237d7b6e9f6923bbcb5",
+  "parent_checkpoint": "checkpoints/upper-h10",
+  "parent_iteration": 100,
+  "parent_state_sha256": "6501dd40a1894cfc4c8cd6cf2023078693ebe16a3e3158130e87d23f62afb6ba",
+  "rescale_factor": 32,
+  "schema_version": 1,
+  "state_count": 400253317,
+  "target_denominator": 1000000,
+  "target_numerator": 826279,
+  "weight_scale": 4294967296,
+  "witness_scale": 2147483648,
+  "z_denominator": 10000,
+  "z_numerator": 3209
+}

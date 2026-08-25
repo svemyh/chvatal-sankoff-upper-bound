@@ -1,0 +1,17 @@
+{
+  "columns": 30,
+  "created_at": "2026-08-24T01:48:07Z",
+  "graph_identity": "4c2514a4066e745d3da90a074cd1dbc5978eecd3259d795c00fd2f9313b8d084",
+  "history": 8,
+  "kernel_version": "upper-fixed-v1",
+  "kind": "lueker-upper-fixed-checkpoint",
+  "parameter_sha256": "c589691a4d75338af7d12c1575936c52d14efe513bd8de8140fc44f97b6e7cb2",
+  "schema_version": 1,
+  "state_count": 6419109,
+  "target_denominator": 1000000,
+  "target_numerator": 826280,
+  "weight_scale": 4294967296,
+  "witness_scale": 67108864,
+  "z_denominator": 10000,
+  "z_numerator": 3209
+}
