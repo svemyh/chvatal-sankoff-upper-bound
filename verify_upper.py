@@ -510,8 +510,8 @@ def verify_saved_certificate(record: dict) -> None:
 def main() -> int:
     if len(sys.argv) != 1:
         raise VerificationError("verify_upper.py takes no arguments")
+    source_paper = ROOT / "sources/papers/lueker-2009.pdf"
     artifacts = [
-        ROOT / "sources/papers/lueker-2009.pdf",
         ROOT / "upper-benchmark-results.json",
         ROOT / "upper-h10-certificate.json",
         ROOT / "LOG.md",
@@ -527,8 +527,22 @@ def main() -> int:
     before = snapshot(artifacts)
     started = time.perf_counter()
 
-    print("[source] authenticating frozen Lueker paper", flush=True)
-    require(sha256_file(ROOT / "sources/papers/lueker-2009.pdf") == PAPER_SHA256, "paper hash mismatch")
+    # The primary source is ACM-copyrighted and is therefore not redistributed
+    # here.  If a local copy is present we authenticate it byte-for-byte; if not
+    # we say so.  The theorem does not depend on the PDF: it is provenance for
+    # the formulation in UPPER_FORMULATION.md.
+    if source_paper.is_file():
+        require(sha256_file(source_paper) == PAPER_SHA256, "paper hash mismatch")
+        artifacts.append(source_paper)
+        source_paper_authenticated = True
+        print("[source] frozen Lueker paper authenticated", flush=True)
+    else:
+        source_paper_authenticated = False
+        print(
+            "[source] Lueker 2009 PDF absent (not redistributed); run "
+            "scripts/fetch_source_paper.sh to authenticate it",
+            flush=True,
+        )
     benchmark = verify_benchmark()
     calibration = certify(
         "calibration", ROOT / "upper_graphs/h8", ROOT / "checkpoints/upper-calibration-h8"
@@ -573,6 +587,7 @@ def main() -> int:
     summary = {
         "status": "PASS",
         "read_only": True,
+        "source_paper_authenticated": source_paper_authenticated,
         "published_calibration": "gamma_2 <= 826280/1000000",
         "record_bound": "gamma_2 <= 824443/1000000 < 826280/1000000",
         "record_bound_approximation": bound_approx,

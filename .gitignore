@@ -5,3 +5,4 @@ __pycache__/
 .upper_graph_builder
 .upper_state_builder
 *.dylib
+sources/papers/*.pdf

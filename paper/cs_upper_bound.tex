@@ -1,32 +1,30 @@
-\documentclass{article}
-
-\usepackage[preprint,nonatbib]{neurips_2024}
+\documentclass[11pt]{article}
 
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage{hyperref}
-\usepackage{url}
-\usepackage{booktabs}
-\usepackage{amsfonts}
+\usepackage[margin=1.15in]{geometry}
 \usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{amsthm}
 \usepackage{graphicx}
+\usepackage{booktabs}
 \usepackage{microtype}
-\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
 
-\title{An Improved Upper Bound for the Binary Chv\'atal--Sankoff Constant}
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}
 
-\author{%
-  Ara\thanks{Ara is an autonomous AI software engineer developed at ara.so. Author contributions are stated in Section~\ref{sec:contributions}.}\\
-  ara.so\\
-  \texttt{research@ara.so}
-  \And
-  Sven Myhre\\
-  ara.so\\
-  \texttt{research@ara.so}
+\title{An Improved Upper Bound for the Binary\\ Chv\'atal--Sankoff Constant}
+
+\author{
+  Ara\thanks{Ara is an autonomous AI software engineer developed at ara.so.
+  Author contributions are stated in Section~\ref{sec:contributions}.}
+  \and
+  Sven Myhre
 }
+\date{ara.so \quad\textperiodcentered\quad \texttt{research@ara.so} \\[2pt] \today}
 
 \begin{document}
-
 \maketitle
 
 \begin{abstract}
@@ -48,9 +46,9 @@ The value of $\gamma_2$ is unknown. Simulations put it near $0.8122$ \cite{boute
 
 \section{Result}
 
-\begin{center}
-\fbox{\parbox{0.86\linewidth}{\centering\textbf{Theorem.}\quad $\displaystyle \gamma_2 \;\le\; \frac{824443}{1000000} \;=\; 0.824443.$}}
-\end{center}
+\begin{theorem}
+$\displaystyle \gamma_2 \;\le\; \frac{824443}{1000000} \;=\; 0.824443 \;<\; 0.826280.$
+\end{theorem}
 
 The bound improves the previous record by $0.001837$ and closes about $5.4\%$ of the remaining gap between the proven bounds.
 
@@ -88,7 +86,7 @@ Reproducibility is the point of this paper, so we describe the artifact exactly 
 
 \textbf{What re-checking costs.} About 90 minutes end to end on an 18-core desktop: roughly an hour and 60\,GB of disk to rebuild the $h=8$ and $h=10$ machines with the included builder, a 3\,GB witness download, and then a 50--75 second scan. The often-quoted ``72 seconds'' is only that final scan.
 
-\textbf{What the verifier checks.} SHA-256 authentication of the machines, the witness checkpoints, the certificate, and the frozen source paper; the feasibility inequality at every one of the 400{,}253{,}317 states; the exact rational log comparison; the hash-chained per-sweep log linking the 113 iterations and the exact rescale; a negative control (the same witness does \emph{not} prove $0.824442$); a sharpness control at $h=8$ (the calibration witness does not prove better than Lueker's published $0.826280$, so the pipeline is not silently optimistic); an adversarial control (a deliberately corrupted witness \emph{is} rejected at the per-state test); and a read-only assertion that the verifier modified no artifact.
+\textbf{What the verifier checks.} SHA-256 authentication of the machines, the witness checkpoints, and the certificate (and the primary-source PDF when the reader supplies their own copy; it is copyrighted and not redistributed with the artifact); the feasibility inequality at every one of the 400{,}253{,}317 states; the exact rational log comparison; the hash-chained per-sweep log linking the 113 iterations and the exact rescale; a negative control (the same witness does \emph{not} prove $0.824442$); a sharpness control at $h=8$ (the calibration witness does not prove better than Lueker's published $0.826280$, so the pipeline is not silently optimistic); an adversarial control (a deliberately corrupted witness \emph{is} rejected at the per-state test); and a read-only assertion that the verifier modified no artifact.
 
 \textbf{What the certificate cannot vouch for.} The theorem quantifies over the $h=10$ machine, so the machine's own correctness is a separate obligation, and hash-pinning authenticates bytes rather than semantics. The dangerous direction is a spurious rejection: the operator drops rejected columns from the row sum, so a legitimate transition wrongly marked as rejecting would understate $A_z$ and make the bound look better than it is. We therefore validate the builder against an independent pure-Python transcription of Lueker's Figure~7 (\texttt{upper\_oracle.py}) in two ways, via \texttt{verify\_graph\_oracle.py}: exhaustively for $h \le 6$ (every state, every column, up to 1.98 million transitions at $h=6$), and by uniformly sampling states of the actual $h=10$ machine and recomputing their complete 38-column rows with the oracle. Both agree with zero mismatches. This is strong evidence rather than proof: the sample covers a small fraction of the machine, and a common-mode misreading of Figure~7 shared by the builder and the oracle would escape both. The $h=8$ calibration reproducing Lueker's published constant is independent evidence against exactly that failure mode.
 

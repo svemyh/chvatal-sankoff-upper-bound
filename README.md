@@ -46,7 +46,9 @@ bounds. No floating-point value decides anything. The commonly quoted "72 second
 final scan only; the hour before it is rebuilding the machines.
 
 What it checks:
-- SHA-256 authentication of graphs, witness checkpoints, certificate, and the frozen paper;
+- SHA-256 authentication of graphs, witness checkpoints, and the certificate (plus the
+  primary-source PDF if you supply your own copy; it is ACM-copyrighted and not
+  redistributed here, see `scripts/fetch_source_paper.sh`);
 - the feasibility inequality at every one of the 400,253,317 states (integer arithmetic);
 - the final comparison `2 log(2z)/log(lambda) <= 824443/1000000` in exact rationals;
 - the hash-chained per-sweep log covering all 113 iterations and the exact rescale;
@@ -109,7 +111,7 @@ See `REPRODUCE.md` for the full command log, machine details, and expected hashe
 | `verify_graph_oracle.py` | independent oracle cross-check of the built automaton |
 | `h10-oracle-spotcheck.json` | result of the h=10 oracle sample check |
 | `test_upper_engine.py`, `test_upper_oracle.py` | unit tests (`python3 -m unittest test_upper_engine test_upper_oracle`) |
-| `sources/papers/lueker-2009.pdf` | frozen primary source, SHA-pinned by the verifier |
+| `scripts/fetch_source_paper.sh` | authenticates your own copy of Lueker 2009 (ACM-copyrighted, not redistributed) |
 
 ## Citation
 
