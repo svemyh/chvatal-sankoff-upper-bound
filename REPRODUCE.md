@@ -8,7 +8,7 @@ The record run (113 power-iteration sweeps at h=10 plus the rescale) took
 10,265 s (2.85 h) and peaked at 56.2 GiB RSS. Graph builds: h=8 in minutes,
 h=10 in roughly an hour and ~60 GB of disk.
 
-## Path A — verify the shipped certificate (~1.5 h wall, mostly graph build)
+## Path A — verify the shipped certificate (~90 min wall, mostly graph build)
 
 ```sh
 pip install -r requirements.txt
@@ -79,3 +79,25 @@ Lueker's theorem (`UPPER_FORMULATION.md`), the calibration report
 (`UPPER_CALIBRATION.md`), the record-run report with timings, hashes, and the
 rescale lineage (`UPPER_H10_RESULT.md`), and the result summary
 (`RESULTS_UPPER.md`).
+
+## Validating the automaton against the oracle
+
+```sh
+python3 verify_graph_oracle.py exhaustive --max-history 6
+python3 verify_graph_oracle.py sample --graph-dir upper_graphs/h10 \
+    --samples 20000 --seed 20260825 --output h10-oracle-spotcheck.json
+```
+
+Expected: `PASS` for every history 2..6 (exhaustive) and zero mismatches over 760,000
+sampled h=10 transitions. Raising `--samples` costs about 13 ms per row; the fixed cost is
+building a sorted index over the 400M states (~4 min, ~7 GB RAM).
+
+## Unit tests
+
+```sh
+python3 -m unittest test_upper_engine test_upper_oracle
+```
+
+Expected: 9 engine tests and 8 oracle tests, all passing. (The h=11 matrix-free experiments
+from the wider campaign are not part of this artifact; tests depending on them were removed
+rather than shipped half-built.)

@@ -29,55 +29,9 @@ from upper_engine import (
     upward_weights,
 )
 from upper_oracle import UpperState, apply_operator, build_automaton
-from upper_matrix_free import CompactMatrixFreeIndex, MatrixFreeIndex, prove_equivalence
-from upper_h11_run import compile_state_builder
 
 
 class UpperEngineTests(unittest.TestCase):
-    def test_persistent_keyless_state_builder_resumes_byte_identically(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            graph_dir = root / "graph"
-            manifest = build_graph(4, graph_dir)
-            states_path = root / "persistent-states.u64"
-            index_path = root / "persistent-values.u32"
-            states_path.touch()
-            with index_path.open("wb") as handle:
-                handle.truncate(2048 * 4)
-            builder = compile_state_builder()
-
-            first = subprocess.run(
-                [
-                    str(builder), "4", "1020", "2048", str(states_path),
-                    str(index_path), "0", "0", "500",
-                ],
-                check=True,
-                text=True,
-                stdout=subprocess.PIPE,
-            )
-            first_fields = dict(
-                field.split("=", 1) for field in first.stdout.strip().split()
-            )
-            self.assertEqual(first_fields["processed"], "500")
-            self.assertEqual(first_fields["complete"], "0")
-            second = subprocess.run(
-                [
-                    str(builder), "4", "1020", "2048", str(states_path),
-                    str(index_path), first_fields["processed"],
-                    first_fields["states"], "100000",
-                ],
-                check=True,
-                text=True,
-                stdout=subprocess.PIPE,
-            )
-            second_fields = dict(
-                field.split("=", 1) for field in second.stdout.strip().split()
-            )
-            self.assertEqual(second_fields["complete"], "1")
-            self.assertEqual(int(second_fields["states"]), manifest["state_count"])
-            self.assertEqual(
-                sha256_file(states_path), sha256_file(graph_dir / manifest["states_file"])
-            )
 
     def test_keyless_builder_is_byte_identical_to_legacy_builder(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -114,68 +68,7 @@ class UpperEngineTests(unittest.TestCase):
                 sha256_file(normal_transitions), sha256_file(keyless_transitions)
             )
 
-    def test_matrix_free_rows_match_stored_graph_exhaustively(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            for history in (2, 3, 4):
-                graph_dir = root / f"graph-h{history}"
-                manifest = build_graph(history, graph_dir)
-                _manifest, states, transitions = load_graph(graph_dir)
-                index = MatrixFreeIndex(
-                    states, manifest, root / f"index-h{history}", threads=3
-                )
-                weights, _exact, _errors = upward_weights(history, Fraction(6, 25))
-                rng = np.random.default_rng(31 + history)
-                witness = rng.integers(
-                    1, WITNESS_SCALE + 1, size=manifest["state_count"], dtype=np.uint32
-                )
-                stored = np.empty(witness.size, dtype=np.uint64)
-                matrix_free = np.empty_like(stored)
-                apply_fixed(transitions, weights, witness, stored)
-                index.apply(weights, witness, matrix_free)
-                np.testing.assert_array_equal(matrix_free, stored)
-                compact = CompactMatrixFreeIndex(
-                    states, manifest, root / f"compact-index-h{history}", threads=3
-                )
-                compact.apply(weights, witness, matrix_free)
-                np.testing.assert_array_equal(matrix_free, stored)
 
-    def test_matrix_free_equivalence_is_checkpointed_and_restartable(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            graph_dir = root / "graph"
-            source_dir = root / "source"
-            equivalence_dir = root / "equivalence"
-            build_graph(3, graph_dir)
-            run(
-                graph_dir=graph_dir,
-                checkpoint_dir=source_dir,
-                z=Fraction(6, 25),
-                max_iterations=2,
-                tolerance_units=0,
-                target_numerator=1,
-                target_denominator=10,
-                log_path=root / "source.log",
-                threads=2,
-            )
-            arguments = dict(
-                graph_dir=graph_dir,
-                index_dir=root / "index",
-                source_checkpoint=source_dir,
-                checkpoint_dir=equivalence_dir,
-                iterations=2,
-                output=root / "proof.json",
-                log_path=root / "equivalence.log",
-                threads=3,
-            )
-            first = prove_equivalence(**arguments)
-            resumed = prove_equivalence(**arguments)
-            self.assertEqual(first, resumed)
-            self.assertEqual(first["status"], "PASS")
-            self.assertTrue(first["all_raw_rows_bit_identical"])
-            self.assertEqual(len(first["lambda_trajectory"]), 2)
-            lines = (root / "equivalence.log").read_text().splitlines()
-            self.assertEqual(len(lines), 2)
 
     def test_builder_sizing_plan_is_exact_and_exposes_next_scale_wall(self):
         h10 = builder_sizing_plan(10)

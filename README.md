@@ -15,7 +15,7 @@ a vector of positive integers, one per state of the complete history-10 automato
 The mathematical search, the computations, and the write-up were carried out by AI agent
 systems directed and verified by a human operator. See `paper/` for the manuscript.
 
-## Verify (fast path, ~1 hour total)
+## Verify (~90 minutes end to end)
 
 Requirements: Python 3.11+, `numpy`, `numba`, a C compiler (`clang` or `cc`), ~65 GB free
 disk, 32 GB+ RAM recommended.
@@ -23,9 +23,9 @@ disk, 32 GB+ RAM recommended.
 ```sh
 pip install -r requirements.txt
 sh scripts/fetch_witness.sh          # downloads the 3.0 GB witness (release assets) + SHA-256 check
-python3 upper_engine.py build-graph --history 8  --graph-dir upper_graphs/h8    # ~minutes
+python3 upper_engine.py build-graph --history 8  --graph-dir upper_graphs/h8    # ~1 min
 python3 upper_engine.py build-graph --history 10 --graph-dir upper_graphs/h10   # ~1 h, ~60 GB
-python3 verify_upper.py              # ~72 s on an 18-core machine
+python3 verify_upper.py              # ~75 s
 ```
 
 `verify_upper.py` ends with JSON `"status": "PASS"` and the line
@@ -34,16 +34,50 @@ python3 verify_upper.py              # ~72 s on an 18-core machine
 PASS: exact feasible witness proves gamma_2 <= 0.824443 < 0.826280
 ```
 
+**Honest description of the verifier.** It uses NumPy and Numba to apply the operator over
+400 million states; it is *not* a pure standard-library program. But every inequality that
+*decides* the claim is evaluated in Python integers and `Fraction`s: the per-state test is
+an integer comparison `S_i <= Lambda * V_i` against the `Lambda` pinned in the script, and
+the final bound comparison uses exact rational log enclosures with explicit remainder
+bounds. No floating-point value decides anything. The commonly quoted "72 seconds" is the
+final scan only; the hour before it is rebuilding the machines.
+
 What it checks:
-- SHA-256 authentication of the graphs, the witness checkpoints, and the certificate;
-- the feasibility inequality at every one of the 400,253,317 states, in integer arithmetic;
-- the final comparison `2 log(2z)/log λ ≤ 824443/1000000` via exact rational enclosures
-  (no floating-point value decides any inequality);
-- a negative control: the same witness does **not** prove the next smaller six-decimal
-  target 0.824442;
-- the calibration gate: the same pipeline at history 8 reproduces Lueker's published
-  0.826280;
-- rejection of a deliberately tampered certificate.
+- SHA-256 authentication of graphs, witness checkpoints, certificate, and the frozen paper;
+- the feasibility inequality at every one of the 400,253,317 states (integer arithmetic);
+- the final comparison `2 log(2z)/log(lambda) <= 824443/1000000` in exact rationals;
+- the hash-chained per-sweep log covering all 113 iterations and the exact rescale;
+- **negative control**: the same witness does *not* prove the next target 0.824442;
+- **sharpness control**: the h=8 calibration witness does *not* prove better than Lueker's
+  published 0.826280, so the pipeline is not silently optimistic;
+- **adversarial control**: a deliberately corrupted witness *is* rejected at the per-state
+  test (proving the check can fail);
+- a read-only assertion that the verifier modified no artifact.
+
+## Validate the machine itself (recommended)
+
+The certificate quantifies over the h=10 automaton, and hashing authenticates *bytes*, not
+*semantics*. The soundness-critical direction is a spurious rejection: rejected columns are
+dropped from the row sum, so a legitimate transition wrongly marked rejecting would
+understate the operator and make the bound look better than it is. `verify_graph_oracle.py`
+cross-checks the C builder against an independent pure-Python transcription of Lueker's
+Figure 7 (`upper_oracle.py`):
+
+```sh
+# every state, every column, for small machines
+python3 verify_graph_oracle.py exhaustive --max-history 6
+
+# random rows of the actual record machine, recomputed by the oracle
+python3 verify_graph_oracle.py sample --graph-dir upper_graphs/h10 \
+    --samples 20000 --seed 20260825
+```
+
+Results shipped here: exhaustive agreement for h = 2..6 (1,979,120 transitions at h=6), and
+760,000 transitions of the h=10 machine recomputed with zero mismatches
+(`h10-oracle-spotcheck.json`). This is strong evidence, not proof: the sample covers a small
+fraction of the machine, and a misreading of Figure 7 common to both implementations would
+escape both. The h=8 calibration reproducing Lueker's published constant is independent
+evidence against that failure mode.
 
 ## Reproduce from scratch (no downloaded witness)
 
@@ -69,7 +103,9 @@ See `REPRODUCE.md` for the full command log, machine details, and expected hashe
 | `upper-h10-certificate.json` | the certificate parameters and hashes |
 | `checkpoints/` | checkpoint metadata (+ small h=8 calibration witness; large states fetched) |
 | `paper/` | manuscript (LaTeX + PDF) |
-| `test_upper_engine.py`, `test_upper_oracle.py` | unit tests for the engine and oracle |
+| `verify_graph_oracle.py` | independent oracle cross-check of the built automaton |
+| `h10-oracle-spotcheck.json` | result of the h=10 oracle sample check |
+| `test_upper_engine.py`, `test_upper_oracle.py` | unit tests (`python3 -m unittest test_upper_engine test_upper_oracle`) |
 | `sources/papers/lueker-2009.pdf` | frozen primary source, SHA-pinned by the verifier |
 
 ## Citation

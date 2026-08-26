@@ -15,26 +15,19 @@ from fractions import Fraction
 
 
 ROOT = Path(__file__).resolve().parent
-VENV_PYTHON = ROOT.parent / ".venv" / "bin" / "python"
 
-# The requested entry point is ``python3 verify_upper.py`` while the campaign's
-# numerical dependencies live in ../.venv.  Re-exec there without writing
-# bytecode or changing any certificate artifact.
+# This verifier uses NumPy and Numba for the 400-million-state scan.  Every
+# inequality that decides the claim is evaluated in Python integers and
+# fractions (see exact_log_interval / exact_target_decision); NumPy is used
+# only to apply the operator and compare integers at scale.
 sys.dont_write_bytecode = True
 try:
     import numba
     import numpy as np
-except ModuleNotFoundError:
-    if os.environ.get("VERIFY_UPPER_REEXEC") == "1" or not VENV_PYTHON.is_file():
-        raise
-    environment = os.environ.copy()
-    environment["VERIFY_UPPER_REEXEC"] = "1"
-    environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    os.execve(
-        VENV_PYTHON,
-        [str(VENV_PYTHON), "-B", str(Path(__file__).resolve()), *sys.argv[1:]],
-        environment,
-    )
+except ModuleNotFoundError as error:  # pragma: no cover - environment guard
+    raise SystemExit(
+        "verify_upper.py needs numpy and numba: pip install -r requirements.txt"
+    ) from error
 
 
 WEIGHT_SCALE = 1 << 32
@@ -151,7 +144,14 @@ def apply_integer_operator(transitions, weights, witness, output):
 
 
 @numba.njit
-def scan_integer_ratios(raw, witness):
+def scan_integer_ratios(raw, witness, pinned_lambda):
+    """Return (max ceil ratio, min floor ratio, first state violating pinned_lambda).
+
+    The third value is a genuine per-state test of the certificate inequality
+    S_i <= Lambda * V_i against the Lambda pinned in EXPECTED, i.e. a constant
+    fixed independently of this data.  (An earlier revision compared against
+    the maximum computed from the same scan, which is vacuous by construction.)
+    """
     maximum_ceiling = np.uint64(0)
     minimum_floor = np.uint64(UINT64_MAX)
     for state in range(raw.size):
@@ -165,7 +165,7 @@ def scan_integer_ratios(raw, witness):
             minimum_floor = floor
     failing = np.int64(-1)
     for state in range(raw.size):
-        if raw[state] > maximum_ceiling * np.uint64(witness[state]):
+        if raw[state] > pinned_lambda * np.uint64(witness[state]):
             failing = state
             break
     return maximum_ceiling, minimum_floor, failing
@@ -281,12 +281,19 @@ def certify(label: str, graph_dir: Path, checkpoint_dir: Path) -> dict:
     require(weights.size == expected["columns"], "weight column count mismatch")
     worst_row = int(weights.sum()) * expected["witness_scale"]
     require(worst_row + expected["witness_scale"] - 1 <= UINT64_MAX, "uint64 preflight failed")
+    pinned_lambda = int(expected["lambda_numerator"])
+    require(
+        pinned_lambda * expected["state_max"] <= UINT64_MAX,
+        "pinned lambda product preflight failed",
+    )
 
     raw = np.empty(expected["state_count"], dtype=np.uint64)
     numba.set_num_threads(min(18, numba.config.NUMBA_NUM_THREADS))
     started = time.perf_counter()
     apply_integer_operator(transitions, weights, witness, raw)
-    lambda_numerator, lambda_floor, failing_state = scan_integer_ratios(raw, witness)
+    lambda_numerator, lambda_floor, failing_state = scan_integer_ratios(
+        raw, witness, np.uint64(pinned_lambda)
+    )
     elapsed = time.perf_counter() - started
     result = {
         "history": expected["history"],
@@ -314,13 +321,58 @@ def certify(label: str, graph_dir: Path, checkpoint_dir: Path) -> dict:
         "state_max",
     ):
         require(result[key] == expected[key], f"{label} {key} mismatch")
-    require(result["failing_state"] == -1, f"{label} feasibility failure")
+    require(
+        result["failing_state"] == -1,
+        f"{label} feasibility failure: state {result['failing_state']} violates "
+        f"S_i <= {pinned_lambda}/2^32 * V_i",
+    )
     print(
         f"[{label}] exact feasibility PASS: lambda={result['lambda_numerator']}/2^32 "
         f"width={result['ratio_width_units']} scan={elapsed:.2f}s",
         flush=True,
     )
     return result
+
+
+def tamper_control(graph_dir: Path, checkpoint_dir: Path) -> dict:
+    """Adversarial control: a corrupted witness must be rejected.
+
+    Halve one witness coordinate, recompute the operator on the tampered
+    vector, and require the per-state feasibility scan to find a violating
+    state.  This exercises the same code path that certifies the record, so a
+    checker that silently accepts anything would fail here.
+    """
+    expected = EXPECTED["calibration"]
+    manifest, transitions = authenticate_graph(graph_dir, expected)
+    _parameters, _latest, witness = authenticate_checkpoint(
+        checkpoint_dir, expected, expected["graph_identity"]
+    )
+    z = Fraction(3209, 10000)
+    weights, _errors = upward_weights(expected["history"], z)
+    pinned_lambda = np.uint64(expected["lambda_numerator"])
+
+    tampered = np.array(witness, copy=True)
+    victim = int(np.argmax(tampered))
+    original = int(tampered[victim])
+    require(original >= 2, "tamper control needs a witness value >= 2")
+    tampered[victim] = original // 2
+
+    raw = np.empty(expected["state_count"], dtype=np.uint64)
+    apply_integer_operator(transitions, weights, tampered, raw)
+    _ceiling, _floor, failing = scan_integer_ratios(raw, tampered, pinned_lambda)
+    require(int(failing) >= 0, "tamper control did NOT reject a corrupted witness")
+    print(
+        f"[tamper] PASS: corrupting witness[{victim}] {original} -> {original // 2} "
+        f"is rejected at state {int(failing)}",
+        flush=True,
+    )
+    return {
+        "victim_state": victim,
+        "original_value": original,
+        "tampered_value": original // 2,
+        "rejected_at_state": int(failing),
+        "status": "PASS",
+    }
 
 
 def verify_log_and_rescale() -> dict:
@@ -485,6 +537,17 @@ def main() -> int:
         Fraction(3209, 10000), calibration["lambda_numerator"], 826280, 1_000_000
     )
     require(calibration_pass, "published 0.826280 calibration target failed")
+    calibration_sharp, _ = exact_target_decision(
+        Fraction(3209, 10000), calibration["lambda_numerator"], 826279, 1_000_000
+    )
+    require(
+        not calibration_sharp,
+        "h=8 witness unexpectedly proves better than Lueker's published 0.826280; "
+        "the calibration gate is not sharp and the pipeline may be biased",
+    )
+    tamper = tamper_control(
+        ROOT / "upper_graphs/h8", ROOT / "checkpoints/upper-calibration-h8"
+    )
 
     record = certify("record", ROOT / "upper_graphs/h10", ROOT / "checkpoints/upper-h10-q31")
     internal_pass, internal_terms = exact_target_decision(
@@ -521,6 +584,7 @@ def main() -> int:
         "record": record,
         "benchmark": benchmark,
         "log": log,
+        "tamper_control": tamper,
         "wall_seconds": elapsed,
     }
     print(json.dumps(summary, indent=2, sort_keys=True, default=str), flush=True)
