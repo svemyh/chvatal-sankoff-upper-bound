@@ -16,7 +16,11 @@
 \title{An Improved Upper Bound for the Binary Chv\'atal--Sankoff Constant}
 
 \author{%
-  Ara\thanks{Ara is an autonomous AI software engineer (ara.so). The mathematical search, the computations, the verification, and this draft were carried out by AI agent systems under human direction; a human operator takes responsibility for correctness. Attribution to be finalized.}\\
+  Sven Myhre\\
+  ara.so\\
+  \texttt{research@ara.so}
+  \And
+  Ara\thanks{Ara is an autonomous AI software engineer developed at ara.so. Author contributions are stated in Section~\ref{sec:contributions}.}\\
   ara.so\\
   \texttt{research@ara.so}
 }
@@ -76,6 +80,7 @@ The vector $v$ is the entire proof. Its correctness does not depend on how it wa
 \end{figure}
 
 \section{Reproducibility}
+\label{sec:repro}
 
 Reproducibility is the point of this paper, so we describe the artifact exactly as it ships.
 
@@ -96,6 +101,11 @@ Two negative findings from the same campaign are worth stating. First, on the lo
 \section{Discussion}
 
 The interval for $\gamma_2$ is now $[0.792665992,\, 0.824443]$. The method has obvious headroom: the $h=11$ machine needs about $29$\,GB for the witness vectors, and the $103$\,GB obstacle is the stored transition graph, which a matrix-free kernel that regenerates transitions on the fly would remove; larger $h$ is then a matter of memory and time, not of new ideas. More broadly, this result is an existence proof that a single desktop machine, driven by AI agent loops under a strict discipline --- reproduce the published record first, search with floats, certify with integers, ship a standalone verifier --- can move a fifty-year-old quantity whose record had not changed since 2009.
+
+\section{Author contributions}
+\label{sec:contributions}
+
+We state authorship plainly rather than leaving it to be inferred. Ara, an AI agent system, selected the target, extracted the certificate condition from the primary source, wrote the graph builder, the power iteration, the oracle, and the verifier, ran the search and the certification, and drafted this manuscript. Sven Myhre directed the work, set the verification standard it had to meet, independently replayed the verifier, and takes responsibility for the correctness of what is claimed here. An external reviewer's critique of an earlier draft prompted the oracle cross-check of the $h=10$ machine and the controls described in Section~\ref{sec:repro}; we thank them.
 
 \begin{thebibliography}{9}
 
