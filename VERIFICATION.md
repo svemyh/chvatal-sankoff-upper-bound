@@ -1,0 +1,118 @@
+# How you can know this number is right
+
+The claim is $\gamma_2 \le 0.824443$. This page explains, without requiring you to read any
+code, why that can be checked rather than believed, and exactly where the remaining risk is.
+
+## The idea that makes it checkable
+
+Finding the answer was hard. Checking it is easy, and those are separate activities.
+
+If you ask for the factors of 2,183, you will work for a while. If someone hands you
+"37 × 59," you multiply and you *know*. You do not have to trust how they found it, whether
+they were clever, lucky, or a machine.
+
+This proof is the second thing. It is a table of 400,253,317 whole numbers, one per state of
+a finite machine. Lueker proved a theorem in 2009 (J. ACM 56(3), eq. 41 and Thm 3.3) which
+says: *if* such a table satisfies one simple inequality at every state, *then* the bound
+follows. Nobody has to trust the search that produced the table, or us.
+
+## The four things that must be true
+
+| # | Claim | How it is established | Who is exposed |
+|---|---|---|---|
+| 1 | Lueker's theorem is correct | Peer-reviewed in the *Journal of the ACM*, standard in the field for 17 years | Not us |
+| 2 | The inequality holds at all 400M states | Machine-checked in whole-number arithmetic; see below | Us, and it is checked |
+| 3 | The final arithmetic is right | Logarithms bounded by exact rationals with proven remainders; the last step is an integer comparison | Us, and it is checked |
+| 4 | We built the machine Lueker describes | The soft link. See "the honest weak point" | Us |
+
+## Why the checker is not just saying yes
+
+A verifier that always prints PASS proves nothing. Ours is made to prove it can fail:
+
+- **Negative control.** The same table does *not* prove 0.824442, one notch better. So the
+  checker discriminates instead of rubber-stamping.
+- **Adversarial control.** Corrupt a single number in the table and the checker rejects it,
+  naming the offending state. Run it yourself: it is part of `verify_upper.py`.
+- **Sharpness control.** Run the whole pipeline at a smaller machine size and it certifies
+  Lueker's published 0.826280 but *not* anything better. So the pipeline is not silently
+  optimistic in our favour.
+
+No floating-point number decides any inequality anywhere in the claim. Floats appear only in
+printed diagnostics.
+
+## The honest weak point, and what was done about it
+
+The theorem is about a specific machine, so the machine's own correctness is a separate
+obligation. A checksum proves our machine file was not altered; it does not prove the file
+is *right*.
+
+The dangerous direction is subtle. The operator drops "rejected" transitions from its row
+sums, so a legitimate transition wrongly marked rejecting would make the machine look weaker
+than reality and the bound come out **better** than the truth. That is an error that
+flatters you, which is the kind worth hunting hardest.
+
+Two independent defences:
+
+**1. Every transition recomputed by a second implementation.**
+`upper_oracle.py` is a separate, pure-Python transcription of Lueker's Figure 7, written to
+be obviously correct rather than fast. `verify_graph_oracle.py` compares it against the C
+builder:
+
+- `exhaustive` — every state and every column, for machines up to h=6 (1,979,120 transitions).
+- `full` — **every one of the 400,253,317 states and all 15.2 billion transitions** of the
+  actual record machine. Result in `h10-oracle-full.json`.
+- `sample` — a fast random subset, for anyone who wants a spot-check in minutes rather than
+  hours (`h10-oracle-spotcheck.json`).
+
+**2. Agreement with an external source.**
+Writing more of our own code cannot rule out a *shared* misreading: if the builder and the
+oracle both misread Figure 7 the same way, they agree and both are wrong. The only cure is
+agreement with someone outside. Lueker's Table II publishes, for h = 2..8, the number of
+accepting states and the resulting upper bound. `verify_lueker_table.py` rebuilds each
+machine from scratch and checks both, certifying his bounds in exact arithmetic
+(`lueker-table-ii-reproduction.json`):
+
+| h | accepting states | Lueker's published bound |
+|---|---|---|
+| 2 | 7 | 0.845855 |
+| 3 | 98 | 0.839250 |
+| 4 | 1,020 | 0.835072 |
+| 5 | 10,160 | 0.831910 |
+| 6 | 89,960 | 0.829530 |
+| 7 | 780,368 | 0.827727 |
+| 8 | 6,419,109 | 0.826280 |
+
+These numbers were computed by a different person, in a different language, seventeen years
+earlier. A transcription error that still reproduces all seven is not a plausible failure
+mode.
+
+## What is still not proven
+
+Stated plainly, because a reader deserves to weigh it:
+
+- **Faithfulness of the transcription is evidenced, not proven.** The seven-row agreement
+  above is strong circumstantial evidence, not a formal proof that our machine *is* the
+  machine in Lueker's Figure 7. Formalising that (in Lean, say) is the natural next step and
+  has not been done.
+- **No external expert has reviewed this yet.** Everything here is machine-checked and
+  independently replayed by the authors. That is not the same as a referee in this area
+  reading the formulation.
+- **Lueker's theorem itself is assumed**, as any paper building on the literature assumes
+  its sources.
+
+## Reproduce the whole chain yourself
+
+```sh
+pip install -r requirements.txt
+python3 -m unittest test_upper_engine test_upper_oracle     # seconds
+python3 verify_lueker_table.py --max-history 8              # external agreement
+python3 upper_engine.py build-graph --history 8  --graph-dir upper_graphs/h8
+python3 upper_engine.py build-graph --history 10 --graph-dir upper_graphs/h10
+sh scripts/fetch_witness.sh
+python3 verify_upper.py                                     # the claim itself
+python3 verify_graph_oracle.py exhaustive --max-history 6   # machine, small sizes
+python3 verify_graph_oracle.py full --graph-dir upper_graphs/h10   # machine, all states
+```
+
+Everything except the last line finishes within about 90 minutes. The last line is a long
+job; `sample` mode gives most of its assurance in minutes.

@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing as mp
+import os
 from pathlib import Path
 import sys
 import time
@@ -223,6 +225,125 @@ def run_sample(graph_dir: Path, samples: int, seed: int) -> dict:
     return payload
 
 
+
+
+# ---------------------------------------------------------------- full sweep
+
+_SHARED: dict = {}
+
+
+def _init_worker(graph_dir: str, index_path: str, history: int) -> None:
+    manifest, states, transitions = load_graph(Path(graph_dir), authenticate=False)
+    base = Path(index_path)
+    _SHARED["states"] = states
+    _SHARED["transitions"] = transitions
+    _SHARED["ordered"] = np.load(base.with_suffix(".ordered.npy"), mmap_mode="r")
+    _SHARED["ordering"] = np.load(base.with_suffix(".ordering.npy"), mmap_mode="r")
+    _SHARED["history"] = history
+    _SHARED["columns"] = columns_for(history)
+
+
+def _lookup_shared(value: int):
+    ordered = _SHARED["ordered"]
+    position = int(np.searchsorted(ordered, np.uint64(value)))
+    if position >= ordered.size or int(ordered[position]) != value:
+        return None
+    return int(_SHARED["ordering"][position])
+
+
+def _check_range(bounds: tuple[int, int]) -> tuple[int, int, list]:
+    start, stop = bounds
+    states = _SHARED["states"]
+    transitions = _SHARED["transitions"]
+    history = _SHARED["history"]
+    columns = _SHARED["columns"]
+    failures = []
+    for index in range(start, stop):
+        state = decode(states[index], history)
+        row = transitions[index]
+        for column, (character, padding) in enumerate(columns):
+            successor = transition(state, character, padding, history)
+            stored = int(row[column])
+            if successor is None:
+                if stored != REJECT:
+                    failures.append({"state": index, "column": column,
+                                     "kind": "stored_accepts_oracle_rejects"})
+                continue
+            if stored == REJECT:
+                failures.append({"state": index, "column": column,
+                                 "kind": "SPURIOUS_REJECT"})
+                continue
+            found = _lookup_shared(encode(successor, history))
+            if found is None or found != stored:
+                failures.append({"state": index, "column": column,
+                                 "kind": "successor_mismatch", "stored": stored,
+                                 "expected_index": found})
+            if failures:
+                return start, stop, failures[:20]
+    return start, stop, failures
+
+
+def run_full(graph_dir: Path, workers: int, chunk: int, index_path: Path,
+             progress_path: Path | None) -> dict:
+    """Recompute EVERY transition of the automaton with the oracle."""
+    manifest, states, transitions = load_graph(graph_dir)
+    history = int(manifest["history"])
+    total = int(states.size)
+
+    ordered_path = index_path.with_suffix(".ordered.npy")
+    ordering_path = index_path.with_suffix(".ordering.npy")
+    if not (ordered_path.is_file() and ordering_path.is_file()):
+        print(f"[full] building sorted index over {total} states", flush=True)
+        raw = np.asarray(states)
+        ordering = np.argsort(raw, kind="stable").astype(np.int64)
+        np.save(ordering_path, ordering)
+        np.save(ordered_path, raw[ordering])
+        del raw, ordering
+    print(f"[full] index ready: {index_path}", flush=True)
+
+    ranges = [(i, min(i + chunk, total)) for i in range(0, total, chunk)]
+    started = time.perf_counter()
+    done = 0
+    failures: list = []
+    ctx = mp.get_context("fork")
+    with ctx.Pool(
+        workers, initializer=_init_worker,
+        initargs=(str(graph_dir), str(index_path), history),
+    ) as pool:
+        for start, stop, chunk_failures in pool.imap_unordered(_check_range, ranges):
+            done += stop - start
+            if chunk_failures:
+                failures.extend(chunk_failures)
+                print(json.dumps(chunk_failures[:5], indent=2), flush=True)
+                pool.terminate()
+                break
+            elapsed = time.perf_counter() - started
+            rate = done / max(elapsed, 1e-9)
+            remaining = (total - done) / max(rate, 1e-9)
+            line = (f"[full] {done}/{total} rows "
+                    f"({100.0 * done / total:.2f}%) {rate:.0f} rows/s "
+                    f"eta {remaining / 3600.0:.2f} h")
+            print(line, flush=True)
+            if progress_path:
+                progress_path.write_text(line + "\n")
+    elapsed = time.perf_counter() - started
+    if failures:
+        raise SystemExit(f"h={history}: {len(failures)} transition mismatches")
+    return {
+        "mode": "full",
+        "history": history,
+        "states": total,
+        "columns": int(transitions.shape[1]),
+        "rows_checked": total,
+        "transitions_checked": total * int(transitions.shape[1]),
+        "workers": workers,
+        "seconds": elapsed,
+        "graph_identity_states_sha256": manifest["states_sha256"],
+        "graph_identity_transitions_sha256": manifest["transitions_sha256"],
+        "status": "PASS",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="mode", required=True)
@@ -234,10 +355,22 @@ def main() -> int:
     sa.add_argument("--samples", type=int, default=20000)
     sa.add_argument("--seed", type=int, default=20260825)
     sa.add_argument("--output", type=Path)
+    fu = sub.add_parser("full")
+    fu.add_argument("--graph-dir", type=Path, required=True)
+    fu.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 2))
+    fu.add_argument("--chunk", type=int, default=200_000)
+    fu.add_argument("--index", type=Path, default=Path("oracle-index.npz"))
+    fu.add_argument("--progress", type=Path)
+    fu.add_argument("--output", type=Path)
     args = parser.parse_args()
 
     if args.mode == "exhaustive":
         payload = run_exhaustive(args.max_history, args.workdir)
+    elif args.mode == "full":
+        payload = run_full(args.graph_dir, args.workers, args.chunk, args.index,
+                           args.progress)
+        if args.output:
+            args.output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
     else:
         payload = run_sample(args.graph_dir, args.samples, args.seed)
         if args.output:

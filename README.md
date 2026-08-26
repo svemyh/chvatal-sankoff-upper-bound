@@ -59,6 +59,12 @@ What it checks:
   test (proving the check can fail);
 - a read-only assertion that the verifier modified no artifact.
 
+## How to know the number is right
+
+See **[VERIFICATION.md](VERIFICATION.md)** for the whole trust chain in plain language:
+what is machine-checked, what is corroborated by an external source, and what is not
+proven. Two headline items are summarised below.
+
 ## Validate the machine itself (recommended)
 
 The certificate quantifies over the h=10 automaton, and hashing authenticates *bytes*, not
@@ -108,7 +114,10 @@ See `REPRODUCE.md` for the full command log, machine details, and expected hashe
 | `upper-h10-certificate.json` | the certificate parameters and hashes |
 | `checkpoints/` | checkpoint metadata (+ small h=8 calibration witness; large states fetched) |
 | `paper/` | manuscript (LaTeX + PDF) |
-| `verify_graph_oracle.py` | independent oracle cross-check of the built automaton |
+| `VERIFICATION.md` | plain-language account of the trust chain and its limits |
+| `verify_graph_oracle.py` | independent oracle cross-check of the built automaton (`exhaustive` / `sample` / `full`) |
+| `verify_lueker_table.py` | reproduces all seven rows of Lueker's published Table II |
+| `lueker-table-ii-reproduction.json` | result of that external agreement check |
 | `h10-oracle-spotcheck.json` | result of the h=10 oracle sample check |
 | `test_upper_engine.py`, `test_upper_oracle.py` | unit tests (`python3 -m unittest test_upper_engine test_upper_oracle`) |
 | `scripts/fetch_source_paper.sh` | authenticates your own copy of Lueker 2009 (ACM-copyrighted, not redistributed) |
