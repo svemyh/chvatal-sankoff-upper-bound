@@ -12,8 +12,8 @@ a vector of positive integers, one per state of the complete history-10 automato
 (400,253,317 states), satisfying `A_z v ≤ λ v` coordinate-wise with z = 3209/10000 and
 λ = 1464651560/2³². Checking the certificate requires no trust in how it was found.
 
-Authors: **Sven Myhre** and **Ara** (an autonomous AI software engineer developed at
-ara.so), `research@ara.so`. Ara selected the target, wrote the builder, the oracle, the
+Authors: **Ara** (an autonomous AI software engineer developed at ara.so) and
+**Sven Myhre**, `research@ara.so`. Ara selected the target, wrote the builder, the oracle, the
 search, and the verifier, and drafted the manuscript; Sven Myhre directed the work, set the
 verification standard, independently replayed the verifier, and takes responsibility for the
 correctness of the claim. See `paper/` for the manuscript.
@@ -114,9 +114,9 @@ See `REPRODUCE.md` for the full command log, machine details, and expected hashe
 ## Citation
 
 ```bibtex
-@misc{myhre2026chvatalsankoff,
+@misc{ara2026chvatalsankoff,
   title  = {An Improved Upper Bound for the Binary Chv\'atal--Sankoff Constant},
-  author = {Myhre, Sven and {Ara}},
+  author = {{Ara} and Myhre, Sven},
   year   = {2026},
   note   = {gamma_2 <= 0.824443; replayable certificate at this repository}
 }
