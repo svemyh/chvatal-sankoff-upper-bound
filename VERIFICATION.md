@@ -79,12 +79,20 @@ machine from scratch and checks both, certifying his bounds in exact arithmetic
 | 4 | 1,020 | 0.835072 |
 | 5 | 10,160 | 0.831910 |
 | 6 | 89,960 | 0.829530 |
-| 7 | 780,368 | 0.827727 |
+| 7 | 780,368 | 0.827727 * |
 | 8 | 6,419,109 | 0.826280 |
 
-These numbers were computed by a different person, in a different language, seventeen years
-earlier. A transcription error that still reproduces all seven is not a plausible failure
-mode.
+All seven rows reproduce: every accepting-state count matches exactly, and every published
+bound agrees with ours to the printed six decimals. These numbers were computed by a
+different person, in a different language, seventeen years earlier. A transcription error
+that still reproduces all seven is not a plausible failure mode.
+
+\* Worth knowing if you try this yourself: **Table II is rounded to nearest, not rounded
+up.** At h=7 the printed 0.827727 lies about 3e-7 *below* Lueker's own computed bound, so it
+is not certifiable as an upper bound at its printed precision; the reproduction checks
+two-sided agreement to six decimals instead, and reports which printed values are themselves
+certifiable. At h=8 the rounding happens to go the other way, which is why our calibration
+gate can certify 0.826280 outright.
 
 ## What is still not proven
 
