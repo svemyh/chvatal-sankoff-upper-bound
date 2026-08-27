@@ -36,12 +36,15 @@ other host.
 
 ## Path A — replay the shipped certificate (~90 minutes)
 
-This needs at least 80 GB free disk and 64 GiB RAM. The verifier's recorded peak was about
+This needs at least 80 GiB free disk and 64 GiB RAM. The verifier's recorded peak was about
 41 GiB RSS. The h=10 graph is about 60 GB; the two downloaded arrays total about 3 GB.
 
 ```sh
-uv sync --frozen
 REPLAY_ROOT=reproduction/shipped-v1.0.0
+CANDIDATE_SHA="$(git rev-parse HEAD)"
+python3 scripts/preflight_path_a.py \
+  --expected-commit "$CANDIDATE_SHA" --output-root "$REPLAY_ROOT"
+uv sync --frozen
 test ! -e "$REPLAY_ROOT"
 mkdir -p "$REPLAY_ROOT/upper_graphs"
 sh scripts/fetch_witness.sh "$REPLAY_ROOT/checkpoints"
@@ -72,6 +75,11 @@ PASS: exact feasible witness proves gamma_2 <= 0.824443 < 0.826280
 The fresh checkpoint root is populated with authenticated copies of the tracked h=8
 calibration and h=10 metadata plus the two authenticated release arrays. Nothing relies on
 the deliberately absent h=10 arrays under the tracked `checkpoints/` paths.
+
+The preflight is read-only and exits nonzero unless the full candidate commit, clean
+worktree, absent output destination, 80 GiB disk, 64 GiB RAM, uv 0.10.2, current lock, and
+strict C11 compiler checks all pass. The release-specific evidence and sequencing contract
+is `docs/RELEASE_V1.1.0_GATE.md`.
 
 ## Path B — deterministic bounded generation from scratch
 
