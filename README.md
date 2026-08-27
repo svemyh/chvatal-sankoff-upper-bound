@@ -138,6 +138,14 @@ evidence against that failure mode. The full-h10 command exists but has not been
 `h10-oracle-full.json` result has been produced. See
 [`docs/FULL_H10_ORACLE.md`](docs/FULL_H10_ORACLE.md) for the future-run contract.
 
+## Bounded continuous integration
+
+GitHub Actions runs the complete 33-test bounded suite, strict Linux C11 and shell checks,
+the independent exhaustive graph/oracle contract through h=6, the Lueker Table II
+reproduction through h=4, and a twice-repeated manuscript build. It never downloads or
+builds the h=10 graph or witness. See [`docs/CI.md`](docs/CI.md) for the exact guarantees
+and limits.
+
 ## Reproduce from scratch
 
 The deterministic from-scratch path is exercised at bounded histories without touching the
