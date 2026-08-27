@@ -111,6 +111,8 @@ class PathAPreflightTests(unittest.TestCase):
         root = Path(__file__).resolve().parent
         gate = (root / "docs/RELEASE_V1.1.0_GATE.md").read_text(encoding="utf-8")
         fetch = (root / "scripts/fetch_witness.sh").read_text(encoding="utf-8")
+        notes = (root / "release-notes-v1.1.0.md").read_text(encoding="utf-8")
+        changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
         assets = {
             "upper-h10-state-0.npy": (
                 "6501dd40a1894cfc4c8cd6cf2023078693ebe16a3e3158130e87d23f62afb6ba"
@@ -119,13 +121,21 @@ class PathAPreflightTests(unittest.TestCase):
                 "e146da77cfb3f37bd00cdfe864abad17741d29a628bf13bd75a0195b91361436"
             ),
         }
+        self.assertEqual((root / "VERSION").read_text(encoding="utf-8"), "1.1.0\n")
+        self.assertIn("## [1.1.0] — Release candidate (unreleased)", changelog)
+        self.assertIn("Path A has not run", notes)
         self.assertIn("## Status: PENDING", gate)
         self.assertIn("15,209,626,046", gate)
-        self.assertIn("1,601,013,396", gate)
+        self.assertIn(
+            "https://github.com/svemyh/chvatal-sankoff-upper-bound/releases/tag/v1.0.0",
+            notes,
+        )
         for asset, digest in assets.items():
             with self.subTest(asset=asset):
-                self.assertIn(asset, gate)
-                self.assertIn(digest, gate)
+                for document in (gate, notes):
+                    self.assertIn("1,601,013,396", document)
+                    self.assertIn(asset, document)
+                    self.assertIn(digest, document)
                 self.assertIn(asset, fetch)
                 self.assertIn(digest, fetch)
 
