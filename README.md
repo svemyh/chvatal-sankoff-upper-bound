@@ -33,7 +33,34 @@ search, and the verifier, and drafted the manuscript; Sven Myhre directed the wo
 verification standard, independently replayed the verifier, and takes responsibility for the
 correctness of the claim. See `paper/` for the manuscript.
 
-## Verify (~90 minutes end to end)
+## Verify exactly without the 60.8 GB graph
+
+**Deferred h=10 gate:** the verifier is implemented and exhaustively tested through
+`h=6`, but the split h=10 state-table assets have not been published and the full
+15,209,626,046-transition run has not been performed. No h=10 PASS is claimed. The manifest
+marks the table `DEFERRED`, so the default command fails closed instead of
+pretending to download or verify unavailable data.
+
+Once those assets are published, the final external command is:
+
+```sh
+uv sync --frozen
+uv run --frozen python verify_matrix_free.py
+```
+
+The code is already wired to automatically download and authenticate only the split 3.2 GB
+state table and 1.6 GB final witness once URLs and part hashes are published. A user who
+already has the canonical state table can exercise the complete path now with
+`--states /path/to/states.u64`; the published witness still downloads
+automatically. The verifier builds a derived 2 GiB membership index, resumes after
+interruption, checks all transitions and exact integer row inequalities, and writes a small
+machine-readable evidence JSON. The projected envelope is 10 GiB free disk, at least 12 GiB
+RAM (16 GiB recommended), and a sustained multicore CPU run. See
+[`docs/MATRIX_FREE_VERIFICATION.md`](docs/MATRIX_FREE_VERIFICATION.md) for the exact
+proof contract, trust boundary, checkpoint behavior, benchmark, and the distinction between
+verification and reproduction, including the explicit deferred items.
+
+## Dense replay / reproduce (~90 minutes end to end)
 
 Requirements: `uv` 0.10.2, a Clang or GCC-compatible C11 compiler, at least 80 GiB free
 disk, at least 64 GiB RAM, and preferably 128 GiB for witness generation. The recorded
@@ -143,7 +170,7 @@ evidence against that failure mode. The full-h10 command exists but has not been
 
 ## Bounded continuous integration
 
-GitHub Actions runs the complete 39-test bounded suite, strict Linux C11 and shell checks,
+GitHub Actions runs the complete 56-test bounded suite, strict Linux C11 and shell checks,
 the independent exhaustive graph/oracle contract through h=6, the Lueker Table II
 reproduction through h=4, and a twice-repeated manuscript build. It never downloads or
 builds the h=10 graph or witness. See [`docs/CI.md`](docs/CI.md) for the exact guarantees
@@ -168,6 +195,7 @@ bounded commands and the h=10 migration boundary.
 | path | contents |
 |---|---|
 | `verify_upper.py` | proof-critical verifier, with optional provenance validation |
+| `verify_matrix_free.py`, `upper_matrix_free.c` | exact resumable verifier that regenerates transitions without the dense graph |
 | `upper_engine.py`, `upper_oracle.py` | deterministic graph builder, power iteration, exact certification/reference model |
 | `upper_contract.py` | builder-independent structural and semantic graph contract |
 | `upper_graph_builder.c`, `upper_state_builder.c` | C kernels, compiled on demand |
@@ -178,6 +206,7 @@ bounded commands and the h=10 migration boundary.
 | `docs/FULL_H10_ORACLE.md` | unexecuted future full-h10 command and acceptance gate |
 | `docs/RELEASE_V1.1.0_GATE.md` | pending v1.1.0 release sequence, Path A evidence contract, and release notes |
 | `verify_graph_oracle.py` | independent oracle cross-check of the built automaton (`exhaustive` / `sample` / `full`) |
+| `docs/MATRIX_FREE_VERIFICATION.md` | one-command graph-free verification contract and resource envelope |
 | `verify_lueker_table.py` | reproduces all seven rows of Lueker's published Table II |
 | `lueker-table-ii-reproduction.json` | result of that external agreement check |
 | `h10-oracle-spotcheck.json` | result of the h=10 oracle sample check |
