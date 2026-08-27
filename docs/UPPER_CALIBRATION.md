@@ -161,8 +161,8 @@ identity, and detects checkpoint tampering.
 The combined task gate is:
 
 ```text
-../.venv/bin/python -m unittest -v test_upper_oracle.py test_upper_engine.py
+../.venv/bin/python -m unittest -v \
+  test_upper_oracle.py test_upper_engine.py test_upper_contract.py
 ```
 
-All 14 tests pass.
-
+All 28 tests pass.

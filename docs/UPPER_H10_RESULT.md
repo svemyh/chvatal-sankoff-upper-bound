@@ -156,6 +156,8 @@ The authenticated transition array has shape `400253317 x 38`, or
 15,209,626,046 entries.  A complete read-only range scan found 6,574,257,580
 valid successors spanning exactly `0..400253316` and 8,635,368,466 reject
 sentinels equal to `4294967295`.  No successor lies outside the state range.
+This was a range scan, not the independent full transition-oracle comparison. The latter is
+specified in `FULL_H10_ORACLE.md` but has not been run.
 
 ## Reproduction evidence
 

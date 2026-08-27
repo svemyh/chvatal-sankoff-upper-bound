@@ -5,10 +5,8 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import io
 import json
 import math
-import os
 from pathlib import Path
 import sys
 import time
@@ -27,7 +25,7 @@ try:
     import numpy as np
 except ModuleNotFoundError as error:  # pragma: no cover - environment guard
     raise SystemExit(
-        "verify_upper.py needs numpy and numba: pip install -r requirements.txt"
+        "verify_upper.py needs the locked dependencies: run uv sync --frozen"
     ) from error
 
 
@@ -140,8 +138,22 @@ def apply_integer_operator(transitions, weights, witness, output):
         for column in range(transitions.shape[1]):
             successor = transitions[state, column]
             if successor != REJECT:
+                # Bounds checks are normally disabled inside Numba kernels.
+                # Use an impossible row-sum sentinel instead of indexing an
+                # out-of-range successor, then reject it explicitly below.
+                if successor >= witness.size:
+                    total = np.uint64(UINT64_MAX)
+                    break
                 total += weights[column] * np.uint64(witness[successor])
         output[state] = total
+
+
+@numba.njit
+def first_invalid_successor_row(raw):
+    for state in range(raw.size):
+        if raw[state] == np.uint64(UINT64_MAX):
+            return state
+    return -1
 
 
 @numba.njit
@@ -227,7 +239,13 @@ def authenticate_graph(graph_dir: Path, expected: dict) -> tuple[dict, np.memmap
     return manifest, transitions
 
 
-def authenticate_checkpoint(checkpoint_dir: Path, expected: dict, graph_id: str):
+def authenticate_checkpoint(
+    checkpoint_dir: Path,
+    expected: dict,
+    graph_id: str,
+    *,
+    require_iteration: bool = True,
+):
     parameters = json.loads((checkpoint_dir / "parameters.json").read_text())
     parameter_keys = (
         "schema_version",
@@ -259,7 +277,8 @@ def authenticate_checkpoint(checkpoint_dir: Path, expected: dict, graph_id: str)
         "z mismatch",
     )
     latest = json.loads((checkpoint_dir / "latest.json").read_text())
-    require(latest["iteration"] == expected["iteration"], "checkpoint iteration mismatch")
+    if require_iteration:
+        require(latest["iteration"] == expected["iteration"], "checkpoint iteration mismatch")
     state_path = checkpoint_dir / latest["state_file"]
     digest = sha256_file(state_path)
     require(digest == latest["state_sha256"], "latest state hash mismatch")
@@ -270,16 +289,45 @@ def authenticate_checkpoint(checkpoint_dir: Path, expected: dict, graph_id: str)
     return parameters, latest, witness
 
 
-def certify(label: str, graph_dir: Path, checkpoint_dir: Path) -> dict:
+def validate_expected_diagnostics(label: str, result: dict) -> None:
+    expected = EXPECTED[label]
+    for key in (
+        "iteration",
+        "lambda_numerator",
+        "lambda_floor",
+        "ratio_width_units",
+        "state_min",
+        "state_max",
+    ):
+        require(result[key] == expected[key], f"{label} {key} mismatch")
+
+
+def certify(
+    label: str,
+    graph_dir: Path,
+    checkpoint_dir: Path,
+    *,
+    check_expected_diagnostics: bool = True,
+) -> dict:
     expected = EXPECTED[label]
     print(f"[{label}] authenticating graph and checkpoint", flush=True)
     manifest, transitions = authenticate_graph(graph_dir, expected)
     parameters, latest, witness = authenticate_checkpoint(
-        checkpoint_dir, expected, expected["graph_identity"]
+        checkpoint_dir,
+        expected,
+        expected["graph_identity"],
+        require_iteration=check_expected_diagnostics,
     )
     z = Fraction(parameters["z_numerator"], parameters["z_denominator"])
     weights, errors = upward_weights(expected["history"], z)
     require(weights.size == expected["columns"], "weight column count mismatch")
+    state_min = int(witness.min())
+    state_max = int(witness.max())
+    require(state_min > 0, f"{label} witness is not strictly positive")
+    require(
+        state_max <= expected["witness_scale"],
+        f"{label} witness exceeds its declared scale",
+    )
     worst_row = int(weights.sum()) * expected["witness_scale"]
     require(worst_row + expected["witness_scale"] - 1 <= UINT64_MAX, "uint64 preflight failed")
     pinned_lambda = int(expected["lambda_numerator"])
@@ -292,6 +340,11 @@ def certify(label: str, graph_dir: Path, checkpoint_dir: Path) -> dict:
     numba.set_num_threads(min(18, numba.config.NUMBA_NUM_THREADS))
     started = time.perf_counter()
     apply_integer_operator(transitions, weights, witness, raw)
+    invalid_successor_row = int(first_invalid_successor_row(raw))
+    require(
+        invalid_successor_row == -1,
+        f"{label} successor closure failure at state {invalid_successor_row}",
+    )
     lambda_numerator, lambda_floor, failing_state = scan_integer_ratios(
         raw, witness, np.uint64(pinned_lambda)
     )
@@ -299,13 +352,14 @@ def certify(label: str, graph_dir: Path, checkpoint_dir: Path) -> dict:
     result = {
         "history": expected["history"],
         "states": expected["state_count"],
+        "iteration": int(latest["iteration"]),
         "lambda_numerator": int(lambda_numerator),
         "lambda_denominator": WEIGHT_SCALE,
         "lambda_floor": int(lambda_floor),
         "ratio_width_units": int(lambda_numerator - lambda_floor),
         "failing_state": int(failing_state),
-        "state_min": int(witness.min()),
-        "state_max": int(witness.max()),
+        "state_min": state_min,
+        "state_max": state_max,
         "raw_max": int(raw.max()),
         "maximum_full_row_sum": worst_row,
         "weight_error_maximum": errors["maximum"],
@@ -314,14 +368,8 @@ def certify(label: str, graph_dir: Path, checkpoint_dir: Path) -> dict:
         "state_sha256": latest["state_sha256"],
         "graph_identity": graph_identity(manifest),
     }
-    for key in (
-        "lambda_numerator",
-        "lambda_floor",
-        "ratio_width_units",
-        "state_min",
-        "state_max",
-    ):
-        require(result[key] == expected[key], f"{label} {key} mismatch")
+    if check_expected_diagnostics:
+        validate_expected_diagnostics(label, result)
     require(
         result["failing_state"] == -1,
         f"{label} feasibility failure: state {result['failing_state']} violates "
@@ -508,32 +556,32 @@ def verify_saved_certificate(record: dict) -> None:
     )
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--graph-root", type=Path, default=ROOT / "upper_graphs")
-    parser.add_argument("--checkpoint-root", type=Path, default=ROOT / "checkpoints")
-    args = parser.parse_args()
-    graph_root = args.graph_root.resolve()
-    checkpoint_root = args.checkpoint_root.resolve()
-    source_paper = ROOT / "sources/papers/lueker-2009.pdf"
-    artifacts = [
-        ROOT / "upper-benchmark-results.json",
-        ROOT / "upper-h10-certificate.json",
-        ROOT / "LOG.md",
-    ]
-    for directory in (
-        graph_root / "h8",
-        graph_root / "h10",
-        checkpoint_root / "upper-calibration-h8",
-        checkpoint_root / "upper-h10",
-        checkpoint_root / "upper-h10-q31",
-    ):
-        artifacts.extend(sorted(path for path in directory.iterdir() if path.is_file()))
-    if source_paper.is_file():
-        artifacts.append(source_paper)
-    before = snapshot(artifacts)
-    started = time.perf_counter()
+def verify_certificate_claim(graph_root: Path, checkpoint_root: Path) -> dict:
+    """Run only the checks whose truth decides the mathematical claim."""
 
+    record = certify(
+        "record",
+        graph_root / "h10",
+        checkpoint_root / "upper-h10-q31",
+        check_expected_diagnostics=False,
+    )
+    claimed_pass, claimed_terms = exact_target_decision(
+        Fraction(3209, 10000), record["lambda_numerator"], 824443, 1_000_000
+    )
+    require(claimed_pass, "claimed 0.824443 target failed")
+    require(824443 < 826280, "record comparison is not strict")
+    return {
+        "record": record,
+        "record_target_log_terms": claimed_terms,
+    }
+
+
+def verify_optional_provenance(
+    record: dict, graph_root: Path, checkpoint_root: Path
+) -> dict:
+    """Validate reproducibility evidence that is not a proof premise."""
+
+    source_paper = ROOT / "sources/papers/lueker-2009.pdf"
     # The primary source is ACM-copyrighted and is therefore not redistributed
     # here.  If a local copy is present we authenticate it byte-for-byte; if not
     # we say so.  The theorem does not depend on the PDF: it is provenance for
@@ -568,23 +616,86 @@ def main() -> int:
     tamper = tamper_control(
         graph_root / "h8", checkpoint_root / "upper-calibration-h8"
     )
-
-    record = certify("record", graph_root / "h10", checkpoint_root / "upper-h10-q31")
     internal_pass, internal_terms = exact_target_decision(
         Fraction(3209, 10000), record["lambda_numerator"], 826279, 1_000_000
-    )
-    claimed_pass, claimed_terms = exact_target_decision(
-        Fraction(3209, 10000), record["lambda_numerator"], 824443, 1_000_000
     )
     next_lower_pass, next_lower_terms = exact_target_decision(
         Fraction(3209, 10000), record["lambda_numerator"], 824442, 1_000_000
     )
     require(internal_pass, "checkpoint target failed")
-    require(claimed_pass, "claimed 0.824443 target failed")
     require(not next_lower_pass, "unexpected 0.824442 target passage")
-    require(824443 < 826280, "record comparison is not strict")
+    validate_expected_diagnostics("record", record)
     verify_saved_certificate(record)
     log = verify_log_and_rescale(checkpoint_root)
+    return {
+        "source_paper_authenticated": source_paper_authenticated,
+        "calibration": calibration,
+        "calibration_log_terms": calibration_terms,
+        "internal_target_log_terms": internal_terms,
+        "next_lower_target_log_terms": next_lower_terms,
+        "benchmark": benchmark,
+        "log": log,
+        "tamper_control": tamper,
+        "saved_certificate_authenticated": True,
+    }
+
+
+def artifact_paths(
+    with_provenance: bool, graph_root: Path, checkpoint_root: Path
+) -> list[Path]:
+    artifacts: list[Path] = []
+    directories = [graph_root / "h10", checkpoint_root / "upper-h10-q31"]
+    if with_provenance:
+        artifacts.extend(
+            [
+                ROOT / "upper-benchmark-results.json",
+                ROOT / "upper-h10-certificate.json",
+                ROOT / "LOG.md",
+            ]
+        )
+        directories.extend(
+            [
+                graph_root / "h8",
+                checkpoint_root / "upper-calibration-h8",
+                checkpoint_root / "upper-h10",
+            ]
+        )
+        source_paper = ROOT / "sources/papers/lueker-2009.pdf"
+        if source_paper.is_file():
+            artifacts.append(source_paper)
+    for directory in directories:
+        require(directory.is_dir(), f"required artifact directory is absent: {directory}")
+        artifacts.extend(sorted(path for path in directory.iterdir() if path.is_file()))
+    return artifacts
+
+
+def make_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--graph-root", type=Path, default=ROOT / "upper_graphs")
+    parser.add_argument("--checkpoint-root", type=Path, default=ROOT / "checkpoints")
+    parser.add_argument(
+        "--with-provenance",
+        action="store_true",
+        help="also validate logs, rescale lineage, calibration, benchmark, and source hashes",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = make_parser().parse_args(argv)
+    graph_root = args.graph_root.resolve()
+    checkpoint_root = args.checkpoint_root.resolve()
+    artifacts = artifact_paths(args.with_provenance, graph_root, checkpoint_root)
+    before = snapshot(artifacts)
+    started = time.perf_counter()
+
+    certificate = verify_certificate_claim(graph_root, checkpoint_root)
+    record = certificate["record"]
+    provenance = (
+        verify_optional_provenance(record, graph_root, checkpoint_root)
+        if args.with_provenance
+        else {"status": "NOT_RUN", "reason": "optional; pass --with-provenance"}
+    )
 
     after = snapshot(artifacts)
     require(after == before, "verifier modified a certificate artifact")
@@ -593,19 +704,13 @@ def main() -> int:
     summary = {
         "status": "PASS",
         "read_only": True,
-        "source_paper_authenticated": source_paper_authenticated,
+        "proof_critical_scope": "PASS",
+        "optional_provenance_scope": "PASS" if args.with_provenance else "NOT_RUN",
         "published_calibration": "gamma_2 <= 826280/1000000",
         "record_bound": "gamma_2 <= 824443/1000000 < 826280/1000000",
         "record_bound_approximation": bound_approx,
-        "calibration_log_terms": calibration_terms,
-        "internal_target_log_terms": internal_terms,
-        "record_target_log_terms": claimed_terms,
-        "next_lower_target_log_terms": next_lower_terms,
-        "calibration": calibration,
-        "record": record,
-        "benchmark": benchmark,
-        "log": log,
-        "tamper_control": tamper,
+        **certificate,
+        "provenance": provenance,
         "wall_seconds": elapsed,
     }
     print(json.dumps(summary, indent=2, sort_keys=True, default=str), flush=True)

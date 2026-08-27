@@ -45,6 +45,56 @@ class FeasibilityResult:
     rhs: Fraction | None
 
 
+def transition_labels(history: int) -> tuple[tuple[int, int], ...]:
+    """Return the declarative transition alphabet in certificate column order."""
+
+    if history < 2:
+        raise ValueError("history must be at least 2")
+    return tuple(
+        (character, padding)
+        for character in (0, 1)
+        for padding in range(-(history - 1), history)
+    )
+
+
+def initial_state(history: int) -> UpperState:
+    """Return Figure 7's unique accepting start state."""
+
+    if history < 2:
+        raise ValueError("history must be at least 2")
+    mask = (1 << history) - 1
+    return UpperState(0, 0, mask, mask)
+
+
+def encode_state(state: UpperState, history: int) -> int:
+    """Encode a reference state without using the production graph code."""
+
+    if history < 2:
+        raise ValueError("history must be at least 2")
+    mask = (1 << history) - 1
+    if any(value < 0 or value > mask for value in (state.x, state.y, state.dx, state.dy)):
+        raise ValueError("state component is outside the history-bit encoding")
+    return (
+        state.x
+        | (state.y << history)
+        | (state.dx << (2 * history))
+        | (state.dy << (3 * history))
+    )
+
+
+def decode_state(value: int, history: int) -> UpperState:
+    """Decode a serialized state without using the production graph code."""
+
+    if history < 2:
+        raise ValueError("history must be at least 2")
+    if value < 0 or value >= 1 << (4 * history):
+        raise ValueError("encoded state is outside the history-bit encoding")
+    mask = (1 << history) - 1
+    return UpperState(
+        *(value >> (part * history) & mask for part in range(4))
+    )
+
+
 def _bits(value: int, width: int) -> list[int]:
     return [(value >> shift) & 1 for shift in range(width - 1, -1, -1)]
 
@@ -177,8 +227,7 @@ def build_automaton(history: int) -> UpperAutomaton:
 
     if history < 2:
         raise ValueError("history must be at least 2")
-    mask = (1 << history) - 1
-    start = UpperState(0, 0, mask, mask)
+    start = initial_state(history)
     states = [start]
     numbers = {start: 0}
     rows: list[dict[tuple[int, int], int] | None] = [None]
@@ -186,19 +235,18 @@ def build_automaton(history: int) -> UpperAutomaton:
     while queue:
         state = queue.popleft()
         row: dict[tuple[int, int], int] = {}
-        for character in (0, 1):
-            for padding in range(-(history - 1), history):
-                successor = transition(state, character, padding, history)
-                if successor is None:
-                    continue
-                number = numbers.get(successor)
-                if number is None:
-                    number = len(states)
-                    numbers[successor] = number
-                    states.append(successor)
-                    rows.append(None)
-                    queue.append(successor)
-                row[(character, padding)] = number
+        for character, padding in transition_labels(history):
+            successor = transition(state, character, padding, history)
+            if successor is None:
+                continue
+            number = numbers.get(successor)
+            if number is None:
+                number = len(states)
+                numbers[successor] = number
+                states.append(successor)
+                rows.append(None)
+                queue.append(successor)
+            row[(character, padding)] = number
         rows[numbers[state]] = row
     if any(row is None for row in rows):  # pragma: no cover - BFS invariant
         raise AssertionError("unprocessed state")
@@ -312,4 +360,3 @@ def row_sums(
 
     ones = tuple(Fraction(1) for _ in automaton.states)
     return apply_operator(automaton, z, ones)
-

@@ -83,7 +83,8 @@ target                      826280/1000000: PASS
 witness SHA-256             48c9b399a30f0bae01999d435af73f9a799a7e2a5c6d83aca69a280419dd2714
 ```
 
-The standalone replay rehashes the `h=8` graph and checkpoint, recomputes all
+The optional provenance replay (`verify_upper.py --with-provenance`) rehashes the `h=8`
+graph and checkpoint, recomputes all
 6,419,109 integer row sums, finds no failing state, and re-proves the exact
 `0.826280` target.  This calibration gate was completed before the larger
 history was selected or run.  Detailed evidence is in
@@ -106,7 +107,7 @@ safe history on the 128 GiB host:
 
 `h=11` was rejected before allocation.  Its conservative builder plan required
 131,897,453,928 bytes and missed the reserve by exactly 80,529,645,068 bytes
-(74.9991 GiB); no `upper_graphs/h11` directory exists.  The standalone replay
+(74.9991 GiB); no `upper_graphs/h11` directory exists.  The optional provenance replay
 recomputes the reserve inequalities from `upper-benchmark-results.json` and
 authenticates the selected `h=10` identity.  See `UPPER_BENCHMARKS.md`.
 
@@ -187,7 +188,7 @@ gate was not relaxed.  Instead, the iteration-100 witness was multiplied
 exactly by 32 into a transactional `Q=2^31` child checkpoint, and sweeps
 101--113 continued from it.
 
-The verifier reconstructs the complete rescaled `.npy` byte stream and checks
+The optional provenance replay reconstructs the complete rescaled `.npy` byte stream and checks
 the chain
 
 ```text
@@ -215,37 +216,32 @@ uv run --frozen python verify_upper.py \
 ```
 
 The locked environment supplies NumPy and Numba. The verifier disables bytecode writes and
-snapshots every certificate artifact before and after the replay to enforce read-only
+the default command snapshots every proof-critical artifact before and after the replay to enforce read-only
 behavior. See `REPRODUCE.md` for creating the fresh roots without relying on absent arrays
 under the tracked checkpoint metadata directories.
 
-The verifier independently:
+The proof-critical default independently:
 
-1. hashes the frozen paper;
-2. recomputes the 20 GiB scale-selection arithmetic;
-3. hashes and rescans the complete `h=8` calibration;
-4. hashes and rescans the complete `h=10` record witness;
-5. reconstructs the exact `Q=2^26` to `Q=2^31` migration hash;
-6. authenticates all 316 logged upper sweeps;
-7. checks every rounding and uint64 preflight term; and
-8. proves `824443/1000000` exactly while rejecting `824442/1000000`.
+1. authenticates and rescans the complete `h=10` record witness;
+2. checks witness positivity and scale, successor closure, rounding, and uint64 preflights;
+3. proves every integer feasibility inequality; and
+4. proves `824443/1000000` exactly.
 
-The clean end-to-end replay completed in 56.45 seconds, peaked at
-41,755,344,896 bytes RSS, used zero swaps, and ended with:
+Run the same command with `--with-provenance` to additionally authenticate the frozen paper
+when present, benchmark, saved certificate JSON, h=8 calibration, all 316 logged sweeps, and
+the exact `Q=2^26` to `Q=2^31` migration. It also runs the negative control rejecting
+`824442/1000000`. These records establish lineage and diagnostics; they are not premises of
+the certificate inequality.
+
+The replay ends with:
 
 ```text
 PASS: exact feasible witness proves gamma_2 <= 0.824443 < 0.826280
 ```
 
-## Artifact identities
+## Immutable record artifact identities
 
 | artifact | SHA-256 |
 |---|---|
-| `verify_upper.py` | `d258fb22be44a9f8ebd0ad1c25b0fc8fc430c84f52042158761fe107be800fd3` |
 | `upper-h10-certificate.json` | `523fb826c7c7e18310cb1625a04d375017ed228bef911063634022560ff012ff` |
 | `upper-benchmark-results.json` | `e64193e8d6bd717d251452b090d941c426abbcd9db4f61eaddb03e0da517554d` |
-| `UPPER_FORMULATION.md` | `4d27665feb90612010830202a3501a7444d142c68de8562d3f45ed6d65c87d37` |
-| `UPPER_CALIBRATION.md` | `39c10650f659b88005678f8aed6f594e50033d50517a70adb561551d91da1b97` |
-| `UPPER_H10_RESULT.md` | `a983f6af55ed966749f9bf608aca318fba003d9669bc47eab143dbc39ebb0047` |
-
-No git operation or external submission was performed.

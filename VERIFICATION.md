@@ -51,18 +51,22 @@ sums, so a legitimate transition wrongly marked rejecting would make the machine
 than reality and the bound come out **better** than the truth. That is an error that
 flatters you, which is the kind worth hunting hardest.
 
-Two independent defences:
+Two independent defences, with an explicit remaining coverage limit:
 
-**1. Every transition recomputed by a second implementation.**
+**1. Transitions recomputed by a second implementation.**
 `upper_oracle.py` is a separate, pure-Python transcription of Lueker's Figure 7, written to
 be obviously correct rather than fast. `verify_graph_oracle.py` compares it against the C
 builder:
 
-- `exhaustive` — every state and every column, for machines up to h=6 (1,979,120 transitions).
-- `full` — **every one of the 400,253,317 states and all 15.2 billion transitions** of the
-  actual record machine. Result in `h10-oracle-full.json`.
+- `exhaustive` — every state and every column for h=2..6 (1,979,120 transitions at h=6),
+  including explicit start-state, uniqueness, quotient, closure, reachability, and
+  completeness invariants.
 - `sample` — a fast random subset, for anyone who wants a spot-check in minutes rather than
   hours (`h10-oracle-spotcheck.json`).
+- `full` — a command for checking all 400,253,317 states and 15,209,626,046 transitions of
+  the record graph. **This command exists but has not been run.** No
+  `h10-oracle-full.json` has been produced or is cited as evidence. Its future inputs,
+  schema, hashes, and acceptance gate are specified in `docs/FULL_H10_ORACLE.md`.
 
 **2. Agreement with an external source.**
 Writing more of our own code cannot rule out a *shared* misreading: if the builder and the
@@ -102,6 +106,9 @@ Stated plainly, because a reader deserves to weigh it:
   above is strong circumstantial evidence, not a formal proof that our machine *is* the
   machine in Lueker's Figure 7. Formalising that (in Lean, say) is the natural next step and
   has not been done.
+- **The h=10 semantic comparison is sampled, not exhaustive.** The shipped spot-check covers
+  760,000 of 15,209,626,046 transitions. The bounded h=2..6 checks are exhaustive; the future
+  full-h10 gate has not been executed.
 - **No external expert has reviewed this yet.** Everything here is machine-checked and
   independently replayed by the authors. That is not the same as a referee in this area
   reading the formulation.
@@ -113,10 +120,11 @@ Stated plainly, because a reader deserves to weigh it:
 ```sh
 uv sync --frozen
 uv run --frozen python -m unittest -v \
-  test_upper_engine.py test_upper_oracle.py test_reproduction.py
+  test_upper_engine.py test_upper_oracle.py test_upper_contract.py test_reproduction.py
 uv run --frozen python verify_lueker_table.py \
   --max-history 4 --max-iterations 400 --tolerance-units 256 \
   --witness-scale 67108864 --threads 2
+uv run --frozen python verify_graph_oracle.py exhaustive --max-history 6
 ```
 
 Those bounded checks neither download nor build h=10. For the full claim replay, including
