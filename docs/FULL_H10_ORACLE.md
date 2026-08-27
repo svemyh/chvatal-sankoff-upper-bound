@@ -2,7 +2,15 @@
 
 ## Status
 
-The full history-10 oracle validation has **not** been run. The repository does not contain
+An earlier, pre-contract build of `verify_graph_oracle.py full` **has** been run to
+completion: all 400,253,317 states and all 15,209,626,046 transitions compared against the
+independent Figure 7 oracle, zero mismatches, zero spurious rejections, 28,825.9 s on 16
+workers, with both graph hashes matching the values below (`h10-oracle-full.json` at commit
+`4ca068a`). That result meets gates 1, 2, 5 and 6. It does **not** emit the `contract` block
+this document requires, so gates 3, 4 and 7 remain formally open and a re-run with the
+current tool is owed.
+
+The full history-10 oracle validation under *this contract* has not been run. The repository does not contain
 `h10-oracle-full.json`, and no result from that filename is part of the current evidence.
 The command exists so a future adequately provisioned run can close the remaining semantic
 coverage gap. It recomputes 15,209,626,046 transitions and must not be treated as a routine

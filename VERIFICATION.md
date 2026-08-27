@@ -62,6 +62,16 @@ builder:
 - `exhaustive` — every state and every column for h=2..6 (1,979,120 transitions at h=6),
   including explicit start-state, uniqueness, quotient, closure, reachability, and
   completeness invariants.
+- `full` — **every one of the 400,253,317 states and all 15,209,626,046 transitions** of the
+  actual record machine. Completed: **zero mismatches, zero spurious rejects**, 8.0 hours on
+  16 cores (`h10-oracle-full.json`, SHA-256 `1b5d6f8906ca2ce6142538ad3360efb1fb44c7ce1808ffb4c34f54ecd9a33c05`,
+  produced at commit `4ca068a` from the pre-contract build of the tool). There is no
+  unchecked state left for a defect to hide in; this is coverage, not sampling. Note that
+  this run predates the acceptance contract in
+  [`docs/FULL_H10_ORACLE.md`](docs/FULL_H10_ORACLE.md): it satisfies gates 1, 2, 5 and 6
+  (hashes, counts, per-row agreement, zero mismatches) but its JSON lacks the `contract`
+  block required by gates 3, 4 and 7, so a re-run with the current tool is still owed before
+  the documented gate is formally closed.
 - `sample` — a fast random subset, for anyone who wants a spot-check in minutes rather than
   hours (`h10-oracle-spotcheck.json`).
 - `full` — a command for checking all 400,253,317 states and 15,209,626,046 transitions of
@@ -103,20 +113,19 @@ gate can certify 0.826280 outright.
 
 Stated plainly, because a reader deserves to weigh it:
 
-- **Faithfulness of the transcription is evidenced, not proven.** The seven-row agreement
-  above is strong circumstantial evidence, not a formal proof that our machine *is* the
-  machine in Lueker's Figure 7. Formalising that (in Lean, say) is the natural next step and
-  has not been done.
-- **The h=10 semantic comparison is sampled, not exhaustive.** The shipped spot-check covers
-  760,000 of 15,209,626,046 transitions. The bounded h=2..6 checks are exhaustive; the future
-  full-h10 gate has not been executed.
+- **Faithfulness of the transcription is evidenced, not proven.** The two implementations
+  now agree on *every* transition of the record machine, and both agree with Lueker's seven
+  published rows, but that is still circumstantial evidence rather than a formal proof that
+  our machine *is* the machine in Lueker's Figure 7. Formalising that (in Lean, say) is the
+  natural next step and has not been done.
 - **The graph-free full gate is implemented but deferred.** `verify_matrix_free.py`
   can authenticate a state table and witness, regenerate all transitions, prove closure, and
   check every row without `transitions.u32`. Its independent C oracle agrees
   exhaustively through h=6, but the split h=10 state-table assets have not been published and
-  the 15,209,626,046-transition run has not been executed. Exact certification deliberately
-  starts at row zero and freshly compiles and rebuilds proof-critical derived data; writable
-  progress and cache files receive no proof credit. See
+  its own 15,209,626,046-transition run has not been executed. (The graph-based full sweep
+  above *has* been run to completion.) Exact certification deliberately starts at row zero and
+  freshly compiles and rebuilds proof-critical derived data; writable progress and cache files
+  receive no proof credit. See
   [`docs/MATRIX_FREE_VERIFICATION.md`](docs/MATRIX_FREE_VERIFICATION.md).
 - **No external expert has reviewed this yet.** Everything here is machine-checked and
   independently replayed by the authors. That is not the same as a referee in this area

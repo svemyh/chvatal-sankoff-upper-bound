@@ -161,14 +161,16 @@ uv run --frozen python verify_graph_oracle.py sample \
 
 The exhaustive command also validates the exact start state, unique canonical quotient
 representatives, successor closure, reachability, and reference completeness. Results shipped
-here: exhaustive agreement for h = 2..6 (1,979,120 transitions at h=6), and
-760,000 transitions of the h=10 machine recomputed with zero mismatches
-(`h10-oracle-spotcheck.json`). This is strong evidence, not proof: the sample covers a small
-fraction of the machine, and a misreading of Figure 7 common to both implementations would
-escape both. The h=8 calibration reproducing Lueker's published constant is independent
-evidence against that failure mode. The full-h10 command exists but has not been run; no
-`h10-oracle-full.json` result has been produced. See
-[`docs/FULL_H10_ORACLE.md`](docs/FULL_H10_ORACLE.md) for the future-run contract.
+here: exhaustive agreement for h = 2..6 (1,979,120 transitions at h=6), and **complete**
+agreement on the h=10 record machine — all 400,253,317 states and all 15,209,626,046
+transitions recomputed by the oracle, zero mismatches, zero spurious rejects, 8.0 hours on
+16 cores (`h10-oracle-full.json`). A fast random subset is also shipped for anyone wanting a
+minutes-long spot-check (`h10-oracle-spotcheck.json`).
+
+What this does *not* rule out is a misreading of Figure 7 common to both implementations.
+That is what `verify_lueker_table.py` addresses: all seven rows of Lueker's published
+Table II (h = 2..8) reproduce, state counts exactly and bounds to the printed six decimals
+(`lueker-table-ii-reproduction.json`).
 
 ## Bounded continuous integration
 
