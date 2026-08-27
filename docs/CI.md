@@ -8,13 +8,16 @@ SHA-256 before use.
 
 The bounded job proves that:
 
-- all 39 current unit, contract, clean-clone reproduction, and Path A preflight tests pass;
-- all three C helpers/builders parse and compile under C11 with GCC warnings treated as
+- all 58 current unit, contract, clean-clone reproduction, and Path A preflight tests pass;
+- all four C helpers/builders parse and compile under C11 with GCC warnings treated as
   errors, including the supported `unsigned __int128` extension;
 - both repository shell scripts parse as POSIX shell;
 - the independent pure-Python oracle agrees with the C graph builder for every state and
   transition through h=6 (1,979,120 transitions at h=6), including start-state, uniqueness,
   canonical quotient, successor closure, reachability, and completeness checks;
+- the verifier-owned matrix-free C oracle agrees byte-for-byte with every production-builder
+  transition through h=6, and its corruption, overflow, closure, reject, forged-checkpoint,
+  planted-binary, and forged-index-cache failure paths are exercised;
 - the documented Lueker Table II reproduction agrees through h=4; and
 - the figures and manuscript build twice with identical hashes, match the checked-in PDFs,
   parse successfully, contain pages, and expose the expected title and bound as text.
@@ -22,8 +25,8 @@ The bounded job proves that:
 The h=6 oracle runs on every pull request because a clean local measurement completed in
 under 30 seconds; there is no reduced or scheduled variant.
 
-CI does **not** download or build the h=10 graph or witness, replay the 400,253,317-state
-certificate, run the 15.2-billion-transition full h=10 oracle, perform a new h=10 power
+CI does **not** download the h=10 state table or witness, replay the 400,253,317-state
+certificate, run the 15.2-billion-transition h=10 matrix-free scan, perform a new h=10 power
 iteration or parameter search, attempt h=11, or prove the independent implementations did
 not share the same transcription error. Those remain separate obligations described in
 `VERIFICATION.md` and `docs/FULL_H10_ORACLE.md`.

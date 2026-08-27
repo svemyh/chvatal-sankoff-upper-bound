@@ -43,21 +43,22 @@ jobs:
         run: |
           set -euo pipefail
           common_flags=(-std=c11 -Wall -Wextra -Werror)
-          for source in upper_exact.c upper_graph_builder.c upper_state_builder.c; do
+          for source in upper_exact.c upper_graph_builder.c upper_state_builder.c upper_matrix_free.c; do
             gcc "${common_flags[@]}" -fsyntax-only "$source"
           done
           gcc "${common_flags[@]}" -O2 -fPIC -shared upper_exact.c -o "$RUNNER_TEMP/upper_exact.so"
           gcc "${common_flags[@]}" -O2 upper_graph_builder.c -o "$RUNNER_TEMP/upper_graph_builder"
           gcc "${common_flags[@]}" -O2 upper_state_builder.c -o "$RUNNER_TEMP/upper_state_builder"
+          gcc "${common_flags[@]}" -O2 -pthread upper_matrix_free.c -o "$RUNNER_TEMP/upper_matrix_free"
 
       - name: Check POSIX shell syntax
         run: sh -n scripts/fetch_source_paper.sh scripts/fetch_witness.sh
 
-      - name: Run all 39 bounded tests
+      - name: Run all 58 bounded tests
         run: |
           uv run --frozen python -m unittest -v \
             test_upper_engine.py test_upper_oracle.py \
-            test_upper_contract.py test_reproduction.py
+            test_upper_contract.py test_reproduction.py test_matrix_free.py
 
       - name: Verify every graph and oracle transition through h=6
         run: |

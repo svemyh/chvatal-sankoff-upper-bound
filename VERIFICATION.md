@@ -110,6 +110,14 @@ Stated plainly, because a reader deserves to weigh it:
 - **The h=10 semantic comparison is sampled, not exhaustive.** The shipped spot-check covers
   760,000 of 15,209,626,046 transitions. The bounded h=2..6 checks are exhaustive; the future
   full-h10 gate has not been executed.
+- **The graph-free full gate is implemented but deferred.** `verify_matrix_free.py`
+  can authenticate a state table and witness, regenerate all transitions, prove closure, and
+  check every row without `transitions.u32`. Its independent C oracle agrees
+  exhaustively through h=6, but the split h=10 state-table assets have not been published and
+  the 15,209,626,046-transition run has not been executed. Exact certification deliberately
+  starts at row zero and freshly compiles and rebuilds proof-critical derived data; writable
+  progress and cache files receive no proof credit. See
+  [`docs/MATRIX_FREE_VERIFICATION.md`](docs/MATRIX_FREE_VERIFICATION.md).
 - **No external expert has reviewed this yet.** Everything here is machine-checked and
   independently replayed by the authors. That is not the same as a referee in this area
   reading the formulation.

@@ -1,0 +1,37 @@
+{
+  "certificate": {
+    "columns": 38,
+    "history": 10,
+    "lambda_denominator": 4294967296,
+    "lambda_numerator": 1464651560,
+    "state_count": 400253317,
+    "target_denominator": 1000000,
+    "target_numerator": 824443,
+    "witness_scale": 2147483648,
+    "z_denominator": 10000,
+    "z_numerator": 3209
+  },
+  "expected_result": {
+    "maximum_ceiling": 1464651560,
+    "minimum_floor": 1464649541,
+    "raw_maximum": 3145313150651095756,
+    "witness_maximum": 2147483648,
+    "witness_minimum": 9834007
+  },
+  "repository": "svemyh/chvatal-sankoff-upper-bound",
+  "schema_version": 1,
+  "state_table": {
+    "availability": "DEFERRED",
+    "bytes": 3202026536,
+    "name": "upper-h10-states.u64",
+    "parts": [],
+    "sha256": "defc127da935708620977efddda218378322d9d23921ac3453c9f7a56ff5f59b"
+  },
+  "witness": {
+    "availability": "PUBLISHED",
+    "bytes": 1601013396,
+    "name": "upper-h10-q31-state-1.npy",
+    "sha256": "e146da77cfb3f37bd00cdfe864abad17741d29a628bf13bd75a0195b91361436",
+    "url": "https://github.com/svemyh/chvatal-sankoff-upper-bound/releases/download/v1.0.0/upper-h10-q31-state-1.npy"
+  }
+}
