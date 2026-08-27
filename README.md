@@ -33,6 +33,14 @@ search, and the verifier, and drafted the manuscript; Sven Myhre directed the wo
 verification standard, independently replayed the verifier, and takes responsibility for the
 correctness of the claim. See `paper/` for the manuscript.
 
+## Release status
+
+`VERSION` and `CHANGELOG.md` identify an unreleased v1.1.0 candidate; they do not indicate
+that v1.1.0 has been published. The candidate release notes are
+[`release-notes-v1.1.0.md`](release-notes-v1.1.0.md), and the required Path A evidence and
+sequencing contract is [`docs/RELEASE_V1.1.0_GATE.md`](docs/RELEASE_V1.1.0_GATE.md).
+Path A has not run for this candidate, so merge, tag, and GitHub release steps remain pending.
+
 ## Verify (~90 minutes end to end)
 
 Requirements: `uv` 0.10.2, a Clang or GCC-compatible C11 compiler, at least 80 GiB free
@@ -174,6 +182,8 @@ bounded commands and the h=10 migration boundary.
 | `upper-h10-certificate.json` | the certificate parameters and hashes |
 | `checkpoints/` | checkpoint metadata (+ small h=8 calibration witness; large states fetched) |
 | `paper/` | manuscript (LaTeX + PDF) |
+| `VERSION`, `CHANGELOG.md` | v1.1.0 candidate version convention and changes since v1.0.0 |
+| `release-notes-v1.1.0.md` | conservative pending release text and reused v1.0.0 asset pins |
 | `VERIFICATION.md` | plain-language account of the trust chain and its limits |
 | `docs/FULL_H10_ORACLE.md` | unexecuted future full-h10 command and acceptance gate |
 | `docs/RELEASE_V1.1.0_GATE.md` | pending v1.1.0 release sequence, Path A evidence contract, and release notes |
