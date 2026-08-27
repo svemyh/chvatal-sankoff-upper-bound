@@ -12,15 +12,16 @@ If you ask for the factors of 2,183, you will work for a while. If someone hands
 they were clever, lucky, or a machine.
 
 This proof is the second thing. It is a table of 400,253,317 whole numbers, one per state of
-a finite machine. Lueker proved a theorem in 2009 (J. ACM 56(3), eq. 41 and Thm 3.3) which
-says: *if* such a table satisfies one simple inequality at every state, *then* the bound
-follows. Nobody has to trust the search that produced the table, or us.
+a finite machine. Dančík and Paterson introduced the automaton/generating-function method;
+Lueker's 2009 finite-history refinement (J. ACM 56(3), eq. 41 and Thm 3.3) says: *if* such a
+table satisfies one simple inequality at every state, *then* the bound follows. Nobody has
+to trust the search that produced the table, or us.
 
 ## The four things that must be true
 
 | # | Claim | How it is established | Who is exposed |
 |---|---|---|---|
-| 1 | Lueker's theorem is correct | Peer-reviewed in the *Journal of the ACM*, standard in the field for 17 years | Not us |
+| 1 | Lueker's theorem is correct | Peer-reviewed in the *Journal of the ACM* and the source of the previous peer-reviewed/certified record | Not us |
 | 2 | The inequality holds at all 400M states | Machine-checked in whole-number arithmetic; see below | Us, and it is checked |
 | 3 | The final arithmetic is right | Logarithms bounded by exact rationals with proven remainders; the last step is an integer comparison | Us, and it is checked |
 | 4 | We built the machine Lueker describes | The soft link. See "the honest weak point" | Us |
@@ -34,8 +35,8 @@ A verifier that always prints PASS proves nothing. Ours is made to prove it can 
 - **Adversarial control.** Corrupt a single number in the table and the checker rejects it,
   naming the offending state. Run it yourself: it is part of `verify_upper.py`.
 - **Sharpness control.** Run the whole pipeline at a smaller machine size and it certifies
-  Lueker's published 0.826280 but *not* anything better. So the pipeline is not silently
-  optimistic in our favour.
+  Lueker's previous peer-reviewed/certified 0.826280 but *not* anything better. So the
+  pipeline is not silently optimistic in our favour.
 
 No floating-point number decides any inequality anywhere in the claim. Floats appear only in
 printed diagnostics.

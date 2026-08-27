@@ -1,9 +1,17 @@
-# Exact formulation for the Lueker upper-bound campaign
+# Exact formulation for the Dančík--Paterson/Lueker upper-bound campaign
 
 Date: 2026-08-24 UTC  
 Scope: tracked upper task 001; source derivation and exact small-history oracle
 
-## Correction to the initial shorthand
+## Method lineage and correction to the initial shorthand
+
+Dančík and Paterson introduced the finite-automaton and generating-function
+method for upper-bounding the binary Chvátal--Sankoff constant
+([Random Structures & Algorithms 6(4), 1995](https://doi.org/10.1002/rsa.3240060408)).
+Lueker's 2009 contribution is the finite-history refinement used here: its
+states retain string suffixes together with boundary differences from the LCS
+dynamic-programming table, and its positive feasible function supplies the
+computable matrix certificate.
 
 Lueker's 2009 upper-bound calculation is not the additive lower-operator
 condition `T w <= w + c`.  The paper's actual finite certificate is the
@@ -62,7 +70,8 @@ assumptions.
    `A_z^m v <= lambda^m v`; positivity of `v` supplies a finite constant `K`
    relating the all-ones initial vector to `v`.
 
-For the binary alphabet the minimal match pairs are `T[c,l]`: when `l >= 0`,
+The machine reads minimal-match pairs rather than raw string characters. For
+the binary alphabet those pairs are `T[c,l]`: when `l >= 0`,
 the top is `(1-c)^l c` and the bottom is `c`; for `l < 0` the roles are
 reversed.  Truncating each side to history `h` gives `l=-(h-1),...,h-1` and,
 from the author's code overview page 5,

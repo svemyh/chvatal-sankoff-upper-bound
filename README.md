@@ -1,16 +1,31 @@
 # An Improved Upper Bound for the Binary Chvátal–Sankoff Constant
 
-**Result:**  γ₂ ≤ 824443/1000000 = **0.824443**, improving the previous best upper bound
-0.826280 (Lueker, *J. ACM* 2009), which had stood for 17 years.
+**Result:**  γ₂ ≤ 824443/1000000 = **0.824443**, improving the previous
+peer-reviewed and independently certified upper bound 0.826280 (Lueker,
+*J. ACM* 2009).
 
 γ₂ is the Chvátal–Sankoff constant: the limit of (expected length of the longest common
 subsequence of two uniformly random binary strings of length n) / n. Open since 1975.
-Known range before this work: 0.792665992 ≤ γ₂ ≤ 0.826280.
+The peer-reviewed range before this work was
+0.792665992 ≤ γ₂ ≤ 0.826280; the lower endpoint is from the
+[ISIT 2025 publication](https://doi.org/10.1109/ISIT63088.2025.11195592).
+Qingqing Liu's 2018 dissertation separately reported 0.825101 from a rerun of
+Lueker's program with better parameters and computing resources, but did not
+publish the parameters, certificate, or replayable computation needed to audit
+that number independently. We therefore distinguish that
+[dissertation report](https://hdl.handle.net/1853/60772) from the previous
+peer-reviewed/certified record. The new 0.824443 certificate improves both
+0.826280 (by 0.001837) and the reported 0.825101 (by 0.000658).
 
-The proof is a finite certificate in the sense of Lueker (2009), eq. (41) / Theorem 3.3:
-a vector of positive integers, one per state of the complete history-10 automaton
-(400,253,317 states), satisfying `A_z v ≤ λ v` coordinate-wise with z = 3209/10000 and
-λ = 1464651560/2³². Checking the certificate requires no trust in how it was found.
+The automaton/generating-function method was introduced by
+[Dančík and Paterson (1995)](https://doi.org/10.1002/rsa.3240060408); Lueker's
+2009 finite-history refinement yields the finite certificate used here. The
+machine reads grouped minimal-match pairs and stores suffixes together with LCS
+boundary-difference state. The certificate is a vector of positive integers,
+one per accepting state of the complete history-10 automaton (400,253,317
+states), satisfying `A_z v ≤ λ v` coordinate-wise with z = 3209/10000 and
+λ = 1464651560/2³². Checking the certificate requires no trust in how it was
+found, while correctness of the automaton remains a separate obligation.
 
 Authors: **Ara** (an autonomous AI software engineer developed at ara.so) and
 **Sven Myhre**, `research@ara.so`. Ara selected the target, wrote the builder, the oracle, the
@@ -21,7 +36,8 @@ correctness of the claim. See `paper/` for the manuscript.
 ## Verify (~90 minutes end to end)
 
 Requirements: `uv` 0.10.2, a Clang or GCC-compatible C11 compiler, at least 80 GB free
-disk, and 64 GiB RAM. The recorded verifier peaked near 41 GiB RSS, so 32 GiB is not
+disk, at least 64 GiB RAM, and preferably 128 GiB for witness generation. The recorded
+verifier peaked at 40.9 GiB RSS and witness generation at 56.2 GiB, so 32 GiB is not
 sufficient. The lock selects CPython 3.11.14, NumPy 1.26.4, Numba 0.59.1, and
 llvmlite 0.42.0. Supported generation hosts are macOS and Linux on architectures where
 Clang/GCC provide `unsigned __int128`; set `CC` to choose the compiler.
