@@ -56,21 +56,120 @@ The bound improves the previous peer-reviewed/certified record by $0.001837$ and
 
 Dan\v{c}\'ik and Paterson introduced the finite-automaton and generating-function method for this upper-bound problem \cite{dancik1995}. Lueker developed the finite-history refinement and positive feasible-function certificate used here \cite{lueker2009}. We keep Lueker's mathematics unchanged and push the finite-history calculation to a machine size that was out of reach in 2009. No new mathematics is introduced; the contribution is a verified computation at a scale two history steps beyond Lueker's published calculation, and the engineering that makes that scale fit on one desktop computer.
 
-\textbf{The certificate idea, in plain words.} The finite-state machine reads grouped minimal-match pairs rather than raw characters from the two strings. A history-$h$ state stores two length-$h$ string suffixes together with two length-$h$ boundary-difference vectors from the LCS dynamic-programming table. Lueker proved that this finite-history machine covers the canonical minimal-match decompositions needed by the Dan\v{c}\'ik--Paterson generating-function argument. His equation~(41) and Theorem~3.3 show that if one can exhibit a vector $v$ of positive numbers, one entry per accepting state, a weight $0<z<\tfrac12$, and a number $0<\lambda<1$ such that a single linear inequality
+\subsection{Minimal match pairs and canonical lists}
+
+Write $L(i,j)$ for the LCS length of $a_1\cdots a_i$ and $b_1\cdots b_j$. A pair $P=(a_1\cdots a_r,b_1\cdots b_s)$ is a \emph{match pair} when $a_r=b_s$. Its final match is \emph{essential} when
 \[
-A_z\, v \;\le\; \lambda\, v
+ L(r-1,s)<L(r,s)\quad\hbox{and}\quad L(r,s-1)<L(r,s),
 \]
-holds coordinate-by-coordinate (where $A_z$ is the machine's transition operator with matches weighted by $z$), then
+and $P$ is a \emph{minimal match pair} when, in addition, $L(r,s)=1$. For the binary alphabet, put $\bar c=1-c$. The minimal match pairs are exactly
 \[
-\gamma_2 \;\le\; \frac{2\log(2z)}{\log \lambda}.
+ T_{c,\ell}=
+ \begin{cases}
+   (\bar c^{\,\ell}c,\ c),&\ell\geq0,\\
+   (c,\ \bar c^{\,-\ell}c),&\ell<0,
+ \end{cases}
+ \qquad c\in\{0,1\},\quad \ell\in\mathbb Z,
 \]
-The vector $v$ is the proof-carrying certificate. Its correctness does not depend on how it was found: anyone can recheck the inequality row by row. The cited covering theorem and a faithful construction of its finite machine are separate obligations.
+and their size (the total number of characters on both sides) is $s(T_{c,\ell})=|\ell|+2$. A list of such pairs generates a string pair by concatenating all top strings and, separately, all bottom strings.
 
-\textbf{Finding the vector.} Larger $h$ gives a stronger bound but exponentially more states. We work at $h=10$: 400{,}253{,}317 states after reduction, with $2(2h-1)=38$ transition columns. The vector is found by power iteration (repeatedly applying $A_z$ and renormalizing), run for 113 sweeps. Two things make this fit in 128\,GB of memory: states are stored once per class of Lueker's simultaneous bit-complement symmetry (the top/bottom exchange is deliberately \emph{not} quotiented, because the canonical tie-breaking in the state encoding does not respect it), and the vector is held in 32-bit fixed-point integers, so the feasibility test is a statement about integers rather than floats. The shipped log records a one-sweep scan of 19 distinct rational $z$ values, using a vector already optimized at $z=3209/10000$; that scan selected $3209/10000$. Because the candidates were not independently converged, we treat the scan only as a local heuristic and make no claim that this $z$ is optimal or that the logged differences measure an unbiased neighbour advantage.
+The finite-history object is a prefix of Lueker's \emph{canonical decomposition}. Starting from $L(0,j)=L(i,0)=0$, compute
+\[
+ L(i,j)=
+ \begin{cases}
+   L(i-1,j-1)+1,&a_i=b_j,\\
+   \max\{L(i-1,j),L(i,j-1)\},&a_i\ne b_j.
+ \end{cases}
+\]
+Then backtrack from the lower-right corner by moving up whenever possible, otherwise left whenever possible, and otherwise diagonally to make a match. Cutting the two strings after each diagonal match gives a unique list. Lueker proves that if the original LCS has length $m$, the first $m$ pieces are minimal match pairs and any remaining piece is a null pair (LCS zero). He also proves that the history-$h$ machine below never rejects such a canonical list, although it may accept additional lists. Thus, for every string pair with LCS length $m$, an accepted list of $m$ minimal match pairs followed by a null pair generates it. This covering result, inherited from Lueker's refinement of the Dan\v{c}\'ik--Paterson method, is what permits accepted lists to be used for an upper bound.
 
-\textbf{Checking the vector.} The claim $\gamma_2 \le 824443/1000000$ reduces, after clearing denominators, to integer comparisons: the feasibility inequality at every one of the 400 million states, and one comparison of logarithms carried out with exact rational enclosures. A deliberate negative control confirms the certificate is sharp: the same vector does \emph{not} prove the next smaller six-decimal target $0.824442$.
+\subsection{The finite-history machine}
 
-\begin{figure}[t]
+An accepting state is a four-tuple
+\[
+ q=(x,y,d^x,d^y)\in(\{0,1\}^h)^4.
+\]
+Here $x=a_{i-h+1}\cdots a_i$ and $y=b_{j-h+1}\cdots b_j$ are the remembered top and bottom suffixes. If $D$ is the limited-history LCS table maintained by the transition, the boundary vectors, in oldest-to-newest order, are
+\[
+ d^x_t=D(i-h+t,j)-D(i-h+t-1,j),\qquad
+ d^y_t=D(i,j-h+t)-D(i,j-h+t-1),\quad 1\leq t\leq h.
+\]
+Every difference is zero or one. Only differences are stored because adding a constant to every remembered table entry changes neither the recurrence nor the acceptance test. The unique start state is
+\[
+ q_0=(0^h,0^h,1^h,1^h);
+\]
+Lueker's prefix lemma justifies viewing this as $h$ harmless initial $T_{0,0}$ pairs rather than introducing transient short-history states.
+
+The finite column alphabet is
+\[
+ \mathcal C_h=\{(c,\ell):c\in\{0,1\},\;-(h-1)\leq\ell\leq h-1\},
+\]
+so there are $2(2h-1)$ columns. Its label $(c,\ell)$ represents the result of deleting padding characters from the left of $T_{c,r}$ until neither side exceeds length $h$: an interior label $|\ell|<h-1$ represents only $r=\ell$, while each boundary label $\ell=\pm(h-1)$ represents the entire same-sign tail $|r|\geq h-1$.
+
+For a transition, set the old corner value to $D(h,h)=h$ and reconstruct its last column from $d^x$ and last row from $d^y$. After appending the truncated pair, extend the unknown outer boundaries conservatively by $D(0,j)=D(0,j-1)$ for $j>h$ and $D(i,0)=D(i-1,0)$ for $i>h$, then apply the recurrence above to every cell with $i>h$ or $j>h$. These are lower bounds on the forgotten full table, and Lueker proves that they are tight along the path of a canonical input. Canonical backtracking uses the fixed priority up, left, diagonal. The column is accepted precisely when this path returns to the old corner $(h,h)$ (having consumed one match); the successor stores the new two suffixes and two boundary-difference vectors. Otherwise the column enters the absorbing rejecting state $\varnothing$. The serialized graph contains exactly the nonrejecting states reachable from $q_0$ by these columns; rejected columns are stored as a sentinel and $\varnothing$ has no serialized row.
+
+Simultaneously complementing both remembered strings sends $(x,y,d^x,d^y)$ to $(\bar x,\bar y,d^x,d^y)$ and preserves the transition system after also replacing $c$ by $\bar c$. We therefore keep the unique representative whose first bit of $x$ is zero. This is the only symmetry quotient used. Exchanging top and bottom would exchange up and left, but the canonical rule gives those moves different priority, so that apparent symmetry is not valid here.
+
+\subsection{Weighted operator and inherited bound}
+
+Let $S_h$ be the reachable accepting states after this quotient. Grouping the infinite alphabet gives the exact weight
+\[
+ w_\ell(z)=
+ \begin{cases}
+   z^{|\ell|+2},&|\ell|<h-1,\\[2pt]
+   \displaystyle\frac{z^{h+1}}{1-z},&|\ell|=h-1.
+ \end{cases}
+\]
+The second case is the geometric tail $\sum_{r=h-1}^{\infty}z^{r+2}$; thus truncating the transition alphabet does not discard the longer minimal match pairs. For $v:S_h\to\mathbb R$, define
+\[
+ (A_zv)(q)=
+ \sum_{(c,\ell)\in\mathcal C_h:\,\delta(q,c,\ell)\ne\varnothing}
+ w_\ell(z)\,v\bigl(\delta(q,c,\ell)\bigr).
+\]
+Consequently, if several columns lead to the same successor, all of their weights are added to the corresponding matrix entry. A rejected column contributes zero; accidentally rejecting a legitimate column would therefore be a soundness-critical error.
+
+Lueker's equation~(41) asks for $0<z<1/2$, $0<\lambda<1$, and a strictly positive vector $v$ such that
+\[
+ A_zv\leq\lambda v
+\]
+componentwise. Nonnegativity gives $A_z^m v\leq\lambda^m v$. Since $S_h$ is finite and $v>0$, a constant $C$ exists with ${\bf1}\leq Cv$; hence the accepted-list generating vector obeys $A_z^m{\bf1}\leq C\lambda^m v$. The start-state coordinate has the geometric decay required by the Dan\v{c}\'ik--Paterson/Lueker covering theorem, which yields
+\[
+ \gamma_2\leq\frac{2\log(2z)}{\log\lambda}.
+\]
+This theorem and the proof that $M_h$ covers canonical decompositions are inherited results. Our implementation supplies a particular graph and positive supersolution and checks them; it does not assert a new theorem.
+
+\subsection{Exact integer certificate}
+
+We use $h=10$, giving 400{,}253{,}317 reachable quotient states and 38 columns, and $z=3209/10000$. Let $Q=2^{32}$ and round every exact column weight \emph{upward},
+\[
+ W_\ell=\lceil Qw_\ell(z)\rceil.
+\]
+For the positive integer witness $V$, the verifier forms
+\[
+ S_q=\sum_{(c,\ell):\,\delta(q,c,\ell)\ne\varnothing}
+ W_\ell V_{\delta(q,c,\ell)}
+\quad\hbox{and checks}\quad
+ S_q\leq\Lambda V_q
+\]
+at every state, with the independently pinned integer $\Lambda=1{,}464{,}651{,}560$. Equivalently, the smallest grid numerator supported by the scan is $\max_q\lceil S_q/V_q\rceil$; the verifier recomputes this ceiling and obtains the pinned value. These two ceiling directions are essential: because $w_\ell\leq W_\ell/Q$,
+\[
+ (A_zV)(q)\leq S_q/Q\leq(\Lambda/Q)V_q.
+\]
+Rounding a weight or the maximum ratio downward could instead understate the operator. The witness scale cancels, so the stored integers themselves are an exact positive vector; floating-point normalization used while searching does not enter this check.
+
+Finally set $\lambda=\Lambda/Q$. For positive integers $p,q$, since $2z,\lambda\in(0,1)$, the negative denominator must be handled in the correct direction:
+\[
+ \frac{2\log(2z)}{\log\lambda}\leq\frac pq
+ \quad\Longleftrightarrow\quad
+ 2q\log(2z)\geq p\log\lambda
+ \quad\Longleftrightarrow\quad
+ (2z)^{2q}\geq\lambda^p.
+\]
+The verifier proves the middle comparison using rational log intervals with explicit remainder bounds. It tests $p/q=824443/1000000$ as that exact rational; it does not round a floating estimate to the nearest six decimals. If one reported an approximation instead, an upper bound would have to be rounded upward. A deliberate negative control confirms that the same witness does \emph{not} prove $824442/1000000$.
+
+The vector was found by 113 power-iteration sweeps. The shipped log also records a one-sweep scan of 19 rational $z$ values using a vector already optimized at $3209/10000$. Because those candidates were not independently converged, the scan is only a local heuristic: we make no claim that this $z$ is optimal or that the logged differences give an unbiased neighbour advantage.
+
+\begin{figure}[htbp]
   \centering
   \includegraphics[width=0.70\linewidth]{fig_scaling.pdf}
   \caption{Certified bounds at the fixed value $z=3209/10000$. The $h=8$ point reproduces Lueker's previous certified record (our calibration gate), and $h=10$ gives the new bound. Liu's unaudited report is shown as a separate reference line.}
@@ -88,7 +187,9 @@ Reproducibility is the point of this paper, so we describe the artifact exactly 
 
 \textbf{What the verifier checks.} The proof-critical default authenticates the $h=10$ graph and witness checkpoint, enforces witness positivity, declared scale, and successor-index closure, checks the feasibility inequality at every one of the 400{,}253{,}317 states, decides the exact rational log comparison, and asserts that no artifact was modified. An explicit \texttt{--with-provenance} mode additionally authenticates the saved certificate and primary-source PDF when supplied, validates the machine-sizing record, hash-chained sweep log, exact rescale lineage, and $h=8$ calibration, and runs three diagnostics: a negative control (the same witness does \emph{not} prove $0.824442$), a sharpness control (the calibration does not prove better than Lueker's published $0.826280$), and an adversarial control (a deliberately corrupted witness \emph{is} rejected). These optional checks establish lineage and diagnostic confidence; they are not premises of the certificate inequality.
 
-\textbf{What the certificate cannot vouch for.} The theorem quantifies over the $h=10$ machine, so the machine's own correctness is a separate obligation, and hash-pinning authenticates bytes rather than semantics. The dangerous direction is a spurious rejection: the operator drops rejected columns from the row sum, so a legitimate transition wrongly marked as rejecting would understate $A_z$ and make the bound look better than it is. We therefore validate the builder against an independent pure-Python transcription of Lueker's Figure~7 (\texttt{upper\_oracle.py}) in two ways, via \texttt{verify\_graph\_oracle.py}: exhaustively for $h \le 6$ (every state, every column, up to 1.98 million transitions at $h=6$), and by uniformly sampling states of the actual $h=10$ machine and recomputing their complete 38-column rows with the oracle. Both agree with zero mismatches. This is strong evidence rather than proof: the sample covers a small fraction of the machine, and a common-mode misreading of Figure~7 shared by the builder and the oracle would escape both. The $h=8$ calibration reproducing Lueker's published constant is independent evidence against exactly that failure mode.
+\textbf{What the certificate cannot vouch for.} The theorem quantifies over the $h=10$ machine, so the machine's own correctness is a separate obligation, and hash-pinning authenticates bytes rather than semantics. The proof-critical default verifies a supersolution for the authenticated graph; the opt-in provenance checks establish lineage and diagnostics, not the graph's mathematical meaning. The dangerous semantic error is a spurious rejection: because rejected columns contribute zero, a legitimate transition wrongly marked rejecting would understate $A_z$ and make the bound look better than it is.
+
+The independent pure-Python program \path{upper_oracle.py} transcribes Lueker's Figure~7; \path{verify_graph_oracle.py} compares it with the builder. For every history $h=2,\ldots,6$, the check is exhaustive over every reachable state and every column; it also establishes the exact start state, unique canonical quotient representatives, successor closure, reachability from the start, and completeness against the reference transition (up to 1{,}979{,}120 transitions at $h=6$). At $h=10$, the shipped check samples 20{,}000 distinct states uniformly without replacement and recomputes all 38 columns of each, for 760{,}000 sampled transitions with zero mismatches. That is sample evidence only: it neither checks all 15{,}209{,}626{,}046 transitions nor proves global $h=10$ graph semantics. No full-$h=10$ oracle run has been performed or claimed. A common-mode misreading of Figure~7 shared by both implementations would also escape these comparisons; reproducing Lueker's independently published state counts and six-decimal Table~II values through $h=8$ is separate evidence against that failure mode.
 
 \textbf{Contents of the release.} The verifier, the certificate ($v$, $z$, $\lambda$, hashes), the graph builder and power iteration used to produce it, the independent oracle and declarative proof contract, exhaustive bounded and mutation tests, the campaign log restricted to the authenticated sweep records, and this manuscript.
 
