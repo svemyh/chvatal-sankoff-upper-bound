@@ -1,7 +1,7 @@
 # A rigorous improved upper bound for the binary Chvátal--Sankoff constant
 
 Date: 2026-08-24 UTC  
-Method: Lueker's finite-history feasible-function certificate  
+Method: Lueker's finite-history refinement of the Dančík--Paterson automaton/generating-function method
 Disposition: **strict improvement certified**
 
 ## Result
@@ -105,11 +105,18 @@ safe history on the 128 GiB host:
 | required reserve | 21,474,836,480 |
 | benchmark peak RSS | 57,421,414,400 |
 
-`h=11` was rejected before allocation.  Its conservative builder plan required
-131,897,453,928 bytes and missed the reserve by exactly 80,529,645,068 bytes
-(74.9991 GiB); no `upper_graphs/h11` directory exists.  The optional provenance replay
-recomputes the reserve inequalities from `upper-benchmark-results.json` and
-authenticates the selected `h=10` identity.  See `UPPER_BENCHMARKS.md`.
+`h=11` was rejected before allocation, so all `h=11` figures are projections,
+not measured closure results.  The builder's sizing heuristic multiplies the
+largest exact state count by 9 per additional history step, giving a planning
+hint of 3,602,279,853 states.  On that projection, the builder
+plan required 131,897,453,928 live bytes and missed the reserve by exactly
+80,529,645,068 bytes (74.9991 GiB).  Of the plan, 103,079,215,104 bytes is the
+projected breadth-first-search hash table; it is not a stored transition graph.
+A dense 42-column uint32 transition array at the projected state count would
+instead occupy about 605.2 GB decimal, before about 28.8 GB for the state array.
+No `upper_graphs/h11` directory exists.  The standalone replay recomputes the
+reserve inequalities from `upper-benchmark-results.json` and authenticates the
+selected `h=10` identity when optional provenance validation is requested.
 
 ## Exact feasibility proof
 
