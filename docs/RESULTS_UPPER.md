@@ -206,16 +206,18 @@ with zero swaps.  Further timing and transition-range evidence is in
 
 ## Standalone read-only replay
 
-Run exactly:
+Under the pinned environment, run:
 
 ```text
-python3 verify_upper.py
+uv run --frozen python verify_upper.py \
+  --graph-root reproduction/shipped-v1.0.0/upper_graphs \
+  --checkpoint-root reproduction/shipped-v1.0.0/checkpoints
 ```
 
-The system `python3` does not need NumPy installed.  The script automatically
-re-executes under the documented `../.venv/bin/python`, disables bytecode and
-Numba cache writes, and snapshots every certificate artifact before and after
-the replay to enforce read-only behavior.
+The locked environment supplies NumPy and Numba. The verifier disables bytecode writes and
+snapshots every certificate artifact before and after the replay to enforce read-only
+behavior. See `REPRODUCE.md` for creating the fresh roots without relying on absent arrays
+under the tracked checkpoint metadata directories.
 
 The verifier independently:
 
@@ -247,4 +249,3 @@ PASS: exact feasible witness proves gamma_2 <= 0.824443 < 0.826280
 | `UPPER_H10_RESULT.md` | `a983f6af55ed966749f9bf608aca318fba003d9669bc47eab143dbc39ebb0047` |
 
 No git operation or external submission was performed.
-

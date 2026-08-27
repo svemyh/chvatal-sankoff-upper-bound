@@ -111,16 +111,15 @@ Stated plainly, because a reader deserves to weigh it:
 ## Reproduce the whole chain yourself
 
 ```sh
-pip install -r requirements.txt
-python3 -m unittest test_upper_engine test_upper_oracle     # seconds
-python3 verify_lueker_table.py --max-history 8              # external agreement
-python3 upper_engine.py build-graph --history 8  --graph-dir upper_graphs/h8
-python3 upper_engine.py build-graph --history 10 --graph-dir upper_graphs/h10
-sh scripts/fetch_witness.sh
-python3 verify_upper.py                                     # the claim itself
-python3 verify_graph_oracle.py exhaustive --max-history 6   # machine, small sizes
-python3 verify_graph_oracle.py full --graph-dir upper_graphs/h10   # machine, all states
+uv sync --frozen
+uv run --frozen python -m unittest -v \
+  test_upper_engine.py test_upper_oracle.py test_reproduction.py
+uv run --frozen python verify_lueker_table.py \
+  --max-history 4 --max-iterations 400 --tolerance-units 256 \
+  --witness-scale 67108864 --threads 2
 ```
 
-Everything except the last line finishes within about 90 minutes. The last line is a long
-job; `sample` mode gives most of its assurance in minutes.
+Those bounded checks neither download nor build h=10. For the full claim replay, including
+fresh graph/checkpoint roots and every artifact path, follow Path A in `REPRODUCE.md`.
+`verify_graph_oracle.py full` remains a separate long job; `sample` gives most of its
+assurance in minutes.

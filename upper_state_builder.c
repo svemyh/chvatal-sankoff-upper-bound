@@ -46,6 +46,8 @@ int main(int argc, char **argv) {
     }
     int h = atoi(argv[1]);
     if (h < 2 || h > MAX_H) die("history must lie in [2,15]");
+    if (!host_is_little_endian())
+        die("persistent matrix-free state files currently require a little-endian host");
     uint64_t state_limit_u64 = parse_u64(argv[2], "STATE_LIMIT");
     uint64_t hash_capacity_u64 = parse_u64(argv[3], "HASH_CAPACITY");
     uint64_t processed_u64 = parse_u64(argv[6], "PROCESSED");

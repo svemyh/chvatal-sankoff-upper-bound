@@ -20,16 +20,30 @@ correctness of the claim. See `paper/` for the manuscript.
 
 ## Verify (~90 minutes end to end)
 
-Requirements: Python 3.11+, `numpy`, `numba`, a C compiler (`clang` or `cc`), ~65 GB free
-disk, 32 GB+ RAM recommended.
+Requirements: `uv` 0.10.2, a Clang or GCC-compatible C11 compiler, at least 80 GB free
+disk, and 64 GiB RAM. The recorded verifier peaked near 41 GiB RSS, so 32 GiB is not
+sufficient. The lock selects CPython 3.11.14, NumPy 1.26.4, Numba 0.59.1, and
+llvmlite 0.42.0. Supported generation hosts are macOS and Linux on architectures where
+Clang/GCC provide `unsigned __int128`; set `CC` to choose the compiler.
 
 ```sh
-pip install -r requirements.txt
-sh scripts/fetch_witness.sh          # downloads the 3.0 GB witness (release assets) + SHA-256 check
-python3 upper_engine.py build-graph --history 8  --graph-dir upper_graphs/h8    # ~1 min
-python3 upper_engine.py build-graph --history 10 --graph-dir upper_graphs/h10   # ~1 h, ~60 GB
-python3 verify_upper.py              # ~75 s
+uv sync --frozen
+REPLAY_ROOT=reproduction/shipped-v1.0.0
+test ! -e "$REPLAY_ROOT"
+mkdir -p "$REPLAY_ROOT/upper_graphs"
+sh scripts/fetch_witness.sh "$REPLAY_ROOT/checkpoints"
+uv run --frozen python upper_engine.py build-graph --history 8 \
+  --graph-dir "$REPLAY_ROOT/upper_graphs/h8"
+uv run --frozen python upper_engine.py build-graph --history 10 \
+  --graph-dir "$REPLAY_ROOT/upper_graphs/h10"
+uv run --frozen python verify_upper.py \
+  --graph-root "$REPLAY_ROOT/upper_graphs" \
+  --checkpoint-root "$REPLAY_ROOT/checkpoints"
 ```
+
+This deliberately keeps generated graphs and downloaded arrays out of the tracked
+`checkpoints/` metadata directories. `scripts/fetch_witness.sh` authenticates both release
+assets before the verifier sees them.
 
 `verify_upper.py` ends with JSON `"status": "PASS"` and the line
 
@@ -76,10 +90,11 @@ Figure 7 (`upper_oracle.py`):
 
 ```sh
 # every state, every column, for small machines
-python3 verify_graph_oracle.py exhaustive --max-history 6
+uv run --frozen python verify_graph_oracle.py exhaustive --max-history 6
 
 # random rows of the actual record machine, recomputed by the oracle
-python3 verify_graph_oracle.py sample --graph-dir upper_graphs/h10 \
+uv run --frozen python verify_graph_oracle.py sample \
+    --graph-dir reproduction/shipped-v1.0.0/upper_graphs/h10 \
     --samples 20000 --seed 20260825
 ```
 
@@ -90,25 +105,24 @@ fraction of the machine, and a misreading of Figure 7 common to both implementat
 escape both. The h=8 calibration reproducing Lueker's published constant is independent
 evidence against that failure mode.
 
-## Reproduce from scratch (no downloaded witness)
+## Reproduce from scratch
 
-The witness itself is re-derivable by power iteration (hours on an 18-core desktop):
+The deterministic from-scratch path is exercised at bounded histories without touching the
+h=10 record:
 
 ```sh
-python3 upper_engine.py build-graph --history 10 --graph-dir upper_graphs/h10
-python3 upper_engine.py run --graph-dir upper_graphs/h10 \
-    --checkpoint-dir checkpoints/upper-h10 --z-numerator 3209 --z-denominator 10000
-python3 upper_engine.py rescale-checkpoint   # see REPRODUCE.md for exact arguments
-python3 verify_upper.py
+uv run --frozen python -m unittest -v test_reproduction.py
 ```
 
-See `REPRODUCE.md` for the full command log, machine details, and expected hashes.
+That test creates two independent h=3 graphs/checkpoint lineages and requires identical
+graph and `.npy` hashes, then reproduces Lueker Table II through h=4. See `REPRODUCE.md` for
+the fully explicit bounded commands and the h=10 migration boundary.
 
 ## Repository layout
 
 | path | contents |
 |---|---|
-| `verify_upper.py` | standalone verifier (the artifact of record; do not modify) |
+| `verify_upper.py` | standalone verifier for the artifact of record |
 | `upper_engine.py`, `upper_oracle.py` | graph builder, power iteration, exact certification |
 | `upper_graph_builder.c`, `upper_state_builder.c` | C kernels, compiled on demand |
 | `upper-h10-certificate.json` | the certificate parameters and hashes |
@@ -119,7 +133,7 @@ See `REPRODUCE.md` for the full command log, machine details, and expected hashe
 | `verify_lueker_table.py` | reproduces all seven rows of Lueker's published Table II |
 | `lueker-table-ii-reproduction.json` | result of that external agreement check |
 | `h10-oracle-spotcheck.json` | result of the h=10 oracle sample check |
-| `test_upper_engine.py`, `test_upper_oracle.py` | unit tests (`python3 -m unittest test_upper_engine test_upper_oracle`) |
+| `test_upper_engine.py`, `test_upper_oracle.py`, `test_reproduction.py` | unit and bounded clean-clone tests |
 | `scripts/fetch_source_paper.sh` | authenticates your own copy of Lueker 2009 (ACM-copyrighted, not redistributed) |
 
 ## Citation
