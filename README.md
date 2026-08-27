@@ -35,7 +35,7 @@ correctness of the claim. See `paper/` for the manuscript.
 
 ## Verify (~90 minutes end to end)
 
-Requirements: `uv` 0.10.2, a Clang or GCC-compatible C11 compiler, at least 80 GB free
+Requirements: `uv` 0.10.2, a Clang or GCC-compatible C11 compiler, at least 80 GiB free
 disk, at least 64 GiB RAM, and preferably 128 GiB for witness generation. The recorded
 verifier peaked at 40.9 GiB RSS and witness generation at 56.2 GiB, so 32 GiB is not
 sufficient. The lock selects CPython 3.11.14, NumPy 1.26.4, Numba 0.59.1, and
@@ -43,8 +43,11 @@ llvmlite 0.42.0. Supported generation hosts are macOS and Linux on architectures
 Clang/GCC provide `unsigned __int128`; set `CC` to choose the compiler.
 
 ```sh
-uv sync --frozen
 REPLAY_ROOT=reproduction/shipped-v1.0.0
+CANDIDATE_SHA="$(git rev-parse HEAD)"
+python3 scripts/preflight_path_a.py \
+  --expected-commit "$CANDIDATE_SHA" --output-root "$REPLAY_ROOT"
+uv sync --frozen
 test ! -e "$REPLAY_ROOT"
 mkdir -p "$REPLAY_ROOT/upper_graphs"
 sh scripts/fetch_witness.sh "$REPLAY_ROOT/checkpoints"
@@ -140,7 +143,7 @@ evidence against that failure mode. The full-h10 command exists but has not been
 
 ## Bounded continuous integration
 
-GitHub Actions runs the complete 33-test bounded suite, strict Linux C11 and shell checks,
+GitHub Actions runs the complete 39-test bounded suite, strict Linux C11 and shell checks,
 the independent exhaustive graph/oracle contract through h=6, the Lueker Table II
 reproduction through h=4, and a twice-repeated manuscript build. It never downloads or
 builds the h=10 graph or witness. See [`docs/CI.md`](docs/CI.md) for the exact guarantees
@@ -156,8 +159,9 @@ uv run --frozen python -m unittest -v test_reproduction.py
 ```
 
 That test creates two independent h=3 graphs/checkpoint lineages and requires identical
-graph and `.npy` hashes, then reproduces Lueker Table II through h=4. See `REPRODUCE.md` for
-the fully explicit bounded commands and the h=10 migration boundary.
+graph and `.npy` hashes, reproduces Lueker Table II through h=4, and checks the Path A
+preflight's immutable resource/commit rules. See `REPRODUCE.md` for the fully explicit
+bounded commands and the h=10 migration boundary.
 
 ## Repository layout
 
@@ -172,11 +176,13 @@ the fully explicit bounded commands and the h=10 migration boundary.
 | `paper/` | manuscript (LaTeX + PDF) |
 | `VERIFICATION.md` | plain-language account of the trust chain and its limits |
 | `docs/FULL_H10_ORACLE.md` | unexecuted future full-h10 command and acceptance gate |
+| `docs/RELEASE_V1.1.0_GATE.md` | pending v1.1.0 release sequence, Path A evidence contract, and release notes |
 | `verify_graph_oracle.py` | independent oracle cross-check of the built automaton (`exhaustive` / `sample` / `full`) |
 | `verify_lueker_table.py` | reproduces all seven rows of Lueker's published Table II |
 | `lueker-table-ii-reproduction.json` | result of that external agreement check |
 | `h10-oracle-spotcheck.json` | result of the h=10 oracle sample check |
 | `test_upper_engine.py`, `test_upper_oracle.py`, `test_upper_contract.py`, `test_reproduction.py` | unit, proof-contract, and bounded clean-clone tests |
+| `scripts/preflight_path_a.py` | read-only disk, RAM, toolchain, lock, commit, and destination preflight |
 | `scripts/fetch_source_paper.sh` | authenticates your own copy of Lueker 2009 (ACM-copyrighted, not redistributed) |
 
 ## Citation

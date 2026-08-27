@@ -8,7 +8,7 @@ SHA-256 before use.
 
 The bounded job proves that:
 
-- all 33 current unit, contract, and clean-clone reproduction tests pass unchanged;
+- all 39 current unit, contract, clean-clone reproduction, and Path A preflight tests pass;
 - all three C helpers/builders parse and compile under C11 with GCC warnings treated as
   errors, including the supported `unsigned __int128` extension;
 - both repository shell scripts parse as POSIX shell;
