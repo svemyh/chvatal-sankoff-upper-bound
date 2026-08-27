@@ -1,5 +1,6 @@
 upper_graphs/
 reproduction/
+.venv/
 checkpoints/upper-h10/state-*.npy
 checkpoints/upper-h10-q31/state-*.npy
 __pycache__/

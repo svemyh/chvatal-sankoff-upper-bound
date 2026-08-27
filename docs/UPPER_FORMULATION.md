@@ -108,6 +108,9 @@ target `826280/1000000`, as stated in Section 3.2.2 lines 1005--1017.
   canonical tie-breaking destroys it.
 - `build_automaton` performs literal breadth-first enumeration from
   `(0^h,0^h,1^h,1^h)`.
+- `upper_contract.py` states the serialized proof contract independently of the production
+  builder: exact start state and column alphabet, unique canonical complement-quotient
+  representatives, successor closure, reachability, and reference completeness.
 - `apply_operator`, `verify_feasible`, and `check_rational_upper_bound` use
   `fractions.Fraction` throughout.  No binary floating-point value can enter
   the oracle or its feasibility verdict.
@@ -117,7 +120,9 @@ The tests reproduce both Figure 5/6 transitions, the complete seven-state
 accepting states at `h=3`.  They also build an exact all-ones certificate at
 `z=1/5`, scan every row, reject a lambda smaller by exactly `10^-9`, reject
 nonpositive/incomplete/nonrational witnesses, and exercise the exact power
-normalization.
+normalization. Contract mutation tests separately reject spurious rejection, missing
+successors, duplicate or missing start states, duplicate states, broken closure,
+unreachable states, and incorrect quotient handling.
 
 ## Rounding and feasibility budget at this stage
 
@@ -133,4 +138,3 @@ normalization.
 The optimized engine may change storage and throughput, but it must remain
 bit-for-bit equivalent to this oracle on small histories and must reduce its
 final witness to the same exact inequalities before any upper bound is claimed.
-

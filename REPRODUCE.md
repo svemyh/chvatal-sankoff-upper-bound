@@ -56,6 +56,11 @@ uv run --frozen python upper_engine.py build-graph \
 uv run --frozen python verify_upper.py \
   --graph-root "$REPLAY_ROOT/upper_graphs" \
   --checkpoint-root "$REPLAY_ROOT/checkpoints"
+
+# Optional lineage, calibration, and diagnostic checks
+uv run --frozen python verify_upper.py --with-provenance \
+  --graph-root "$REPLAY_ROOT/upper_graphs" \
+  --checkpoint-root "$REPLAY_ROOT/checkpoints"
 ```
 
 The final command must print JSON status `PASS` and:
@@ -194,10 +199,23 @@ at 56.2 GiB RSS.
 
 ```sh
 uv run --frozen python -m unittest -v \
-  test_upper_engine.py test_upper_oracle.py test_reproduction.py
+  test_upper_engine.py test_upper_oracle.py test_upper_contract.py test_reproduction.py
+
+uv run --frozen python verify_graph_oracle.py exhaustive \
+  --max-history 6 --workdir reproduction/bounded-contract
 ```
 
-The suite covers the exact normalizer over uint64/uint32 boundary values, the verifier-grade
+The combined suite covers the exact normalizer over uint64/uint32 boundary values, the verifier-grade
 ceiling overflow preflight, overflow-safe ratio scanning, explicit little-endian graph bytes,
-restart/rescale behavior, exhaustive oracle agreement through h=4, two independent
+restart/rescale behavior, mutation-based certificate acceptance/rejection, two independent
 byte-identical bounded generations, and Lueker Table II through h=4.
+
+The exhaustive run checks the initial state, state uniqueness, complement-quotient
+canonicality, successor closure, reachability, completeness, and every reference transition.
+It must report `PASS` for every history 2..6. The shipped h=10 spot-check covers 760,000
+transitions with zero mismatches; rerunning it requires the h=10 graph and is not a bounded test.
+The full-h10 command is specified in `docs/FULL_H10_ORACLE.md`, but has not been run and no
+`h10-oracle-full.json` exists.
+
+The h=11 matrix-free experiments from the wider campaign are not part of this artifact; tests
+depending on them were removed rather than shipped half-built.

@@ -18,11 +18,18 @@ This script closes that gap without trusting the C builder:
                 Any spurious REJECT, missing state, or wrong successor in a
                 sampled row is reported and exits nonzero.
 
+``full``        run the structural contract and recompute every transition of
+                an existing graph.  The command exists for a future h=10 run;
+                no completed full-h10 result is shipped by this repository.
+
 Usage
 -----
     python3 verify_graph_oracle.py exhaustive --max-history 6
     python3 verify_graph_oracle.py sample --graph-dir upper_graphs/h10 \
         --samples 20000 --seed 20260825
+
+The exhaustive mode is intentionally capped at h=6.  See
+``docs/FULL_H10_ORACLE.md`` before attempting the full command.
 """
 
 from __future__ import annotations
@@ -35,32 +42,40 @@ from pathlib import Path
 import sys
 import time
 
+import numba
 import numpy as np
 
-from upper_engine import decode_state, load_graph, build_graph, REJECT
-from upper_oracle import UpperState, build_automaton, transition
+from upper_contract import (
+    ContractError,
+    REJECT_INDEX,
+    validate_complete_graph,
+)
+from upper_engine import build_graph, load_graph
+from upper_oracle import (
+    UpperState,
+    decode_state,
+    encode_state,
+    initial_state,
+    reduce_complement,
+    transition,
+    transition_labels,
+)
+
+
+REJECT = REJECT_INDEX
 
 
 def columns_for(history: int) -> list[tuple[int, int]]:
-    """Column order shared by the builder, the weights, and the oracle."""
-    return [
-        (character, padding)
-        for character in (0, 1)
-        for padding in range(-(history - 1), history)
-    ]
+    """Declarative certificate column order, independent of the builder."""
+    return list(transition_labels(history))
 
 
 def encode(state: UpperState, history: int) -> int:
-    return (
-        state.x
-        | (state.y << history)
-        | (state.dx << (2 * history))
-        | (state.dy << (3 * history))
-    )
+    return encode_state(state, history)
 
 
 def decode(value: int, history: int) -> UpperState:
-    return UpperState(*decode_state(int(value), history))
+    return decode_state(int(value), history)
 
 
 def check_rows(
@@ -142,30 +157,20 @@ def make_lookup(states: np.ndarray):
 
 
 def run_exhaustive(max_history: int, workdir: Path) -> dict:
+    if max_history < 2 or max_history > 6:
+        raise SystemExit("exhaustive mode is deliberately bounded to histories 2..6")
     results = []
     for history in range(2, max_history + 1):
         started = time.perf_counter()
-        automaton = build_automaton(history)
         graph_dir = workdir / f"h{history}"
         if not (graph_dir / "graph.json").is_file():
             build_graph(history, graph_dir)
         manifest, states, transitions = load_graph(graph_dir)
-        if states.size != len(automaton.states):
-            raise SystemExit(
-                f"h={history}: state count differs "
-                f"(graph {states.size}, oracle {len(automaton.states)})"
-            )
-        lookup = make_lookup(np.asarray(states))
-        failures = check_rows(
-            np.arange(states.size), states, transitions, history, lookup=lookup
-        )
-        if failures:
-            print(json.dumps(failures[:20], indent=2))
-            raise SystemExit(f"h={history}: {len(failures)} transition mismatches")
-        # Every oracle state must also appear in the graph (no missing states).
-        for state in automaton.states:
-            if lookup(encode(state, history)) is None:
-                raise SystemExit(f"h={history}: oracle state missing from graph")
+        try:
+            contract = validate_complete_graph(states, transitions, history)
+        except ContractError as error:
+            print(json.dumps({"kind": error.code, **error.details}, indent=2))
+            raise SystemExit(f"h={history}: proof contract failed: {error}") from error
         elapsed = time.perf_counter() - started
         results.append(
             {
@@ -174,6 +179,9 @@ def run_exhaustive(max_history: int, workdir: Path) -> dict:
                 "columns": int(transitions.shape[1]),
                 "rows_checked": int(states.size),
                 "transitions_checked": int(states.size) * int(transitions.shape[1]),
+                "contract": contract,
+                "graph_identity_states_sha256": manifest["states_sha256"],
+                "graph_identity_transitions_sha256": manifest["transitions_sha256"],
                 "seconds": elapsed,
                 "status": "PASS",
             }
@@ -189,6 +197,9 @@ def run_exhaustive(max_history: int, workdir: Path) -> dict:
 def run_sample(graph_dir: Path, samples: int, seed: int) -> dict:
     manifest, states, transitions = load_graph(graph_dir)
     history = int(manifest["history"])
+    expected_start = encode(initial_state(history), history)
+    if not states.size or int(states[0]) != expected_start:
+        raise SystemExit(f"h={history}: serialized start state is incorrect")
     started = time.perf_counter()
     rng = np.random.default_rng(seed)
     indices = rng.choice(states.size, size=min(samples, states.size), replace=False)
@@ -230,6 +241,83 @@ def run_sample(graph_dir: Path, samples: int, seed: int) -> dict:
 # ---------------------------------------------------------------- full sweep
 
 _SHARED: dict = {}
+
+
+@numba.njit
+def _scan_discovery_order(transitions, state_count):
+    """Validate closure and prove reachability by serialized discovery order."""
+    discovered = np.zeros(state_count, dtype=np.uint8)
+    discovered[0] = 1
+    for source in range(state_count):
+        if discovered[source] == 0:
+            return source, -1, -1, int(discovered.sum())
+        for column in range(transitions.shape[1]):
+            successor = int(transitions[source, column])
+            if successor == REJECT:
+                continue
+            if successor < 0 or successor >= state_count:
+                return source, column, successor, int(discovered.sum())
+            discovered[successor] = 1
+    return -1, -1, -1, int(discovered.sum())
+
+
+def validate_full_structure(states, transitions, history: int, ordered, ordering) -> dict:
+    """Scalable structural contract used only by the future full-h10 run."""
+    count = int(states.size)
+    if count == 0 or int(states[0]) != encode(initial_state(history), history):
+        raise SystemExit(f"h={history}: serialized start state is incorrect")
+    if ordered.shape != (count,) or ordering.shape != (count,):
+        raise SystemExit(f"h={history}: lookup index shape does not match the state set")
+    previous = None
+    for start in range(0, count, 4_000_000):
+        stop = min(start + 4_000_000, count)
+        values = np.asarray(ordered[start:stop])
+        indices = np.asarray(ordering[start:stop])
+        if np.any(indices < 0) or np.any(indices >= count):
+            raise SystemExit(f"h={history}: lookup index contains an out-of-range row")
+        if not np.array_equal(values, np.asarray(states[indices])):
+            raise SystemExit(f"h={history}: lookup index does not match the state table")
+        if previous is not None and values.size and int(values[0]) <= previous:
+            raise SystemExit(f"h={history}: duplicate or unsorted state at sorted index {start}")
+        bad_order = np.flatnonzero(values[1:] <= values[:-1])
+        if bad_order.size:
+            index = start + int(bad_order[0]) + 1
+            raise SystemExit(f"h={history}: duplicate or unsorted state at sorted index {index}")
+        if values.size:
+            previous = int(values[-1])
+    mask = (1 << history) - 1
+    for start in range(0, count, 4_000_000):
+        values = np.asarray(states[start : start + 4_000_000])
+        bad = np.flatnonzero((values & mask) >= (1 << (history - 1)))
+        if bad.size:
+            index = start + int(bad[0])
+            state = decode(states[index], history)
+            if reduce_complement(state, history) != state:
+                raise SystemExit(f"h={history}: noncanonical quotient state at {index}")
+    source, column, successor, reached = _scan_discovery_order(transitions, count)
+    if column >= 0:
+        raise SystemExit(
+            f"h={history}: successor {successor} at ({source}, {column}) is outside the state set"
+        )
+    if source >= 0:
+        raise SystemExit(
+            f"h={history}: state {source} was not reached before its serialized row; "
+            f"only {reached} states discovered"
+        )
+    return {
+        "history": history,
+        "states": count,
+        "columns": int(transitions.shape[1]),
+        "start_state_index": 0,
+        "start_state_correct": True,
+        "state_uniqueness": True,
+        "lookup_index_validated": True,
+        "quotient_canonical": True,
+        "successor_closure": True,
+        "reachable_states": reached,
+        "all_states_reachable": reached == count,
+        "reachability_method": "serialized_discovery_order",
+    }
 
 
 def _init_worker(graph_dir: str, index_path: str, history: int) -> None:
@@ -300,6 +388,9 @@ def run_full(graph_dir: Path, workers: int, chunk: int, index_path: Path,
         np.save(ordered_path, raw[ordering])
         del raw, ordering
     print(f"[full] index ready: {index_path}", flush=True)
+    ordered = np.load(ordered_path, mmap_mode="r")
+    ordering = np.load(ordering_path, mmap_mode="r")
+    contract = validate_full_structure(states, transitions, history, ordered, ordering)
 
     ranges = [(i, min(i + chunk, total)) for i in range(0, total, chunk)]
     started = time.perf_counter()
@@ -338,6 +429,15 @@ def run_full(graph_dir: Path, workers: int, chunk: int, index_path: Path,
         "transitions_checked": total * int(transitions.shape[1]),
         "workers": workers,
         "seconds": elapsed,
+        "contract": {
+            **contract,
+            "rows_checked": total,
+            "transitions_checked": total * int(transitions.shape[1]),
+            "spurious_rejections": 0,
+            "missing_successors": 0,
+            "transition_mismatches": 0,
+            "reference_complete": True,
+        },
         "graph_identity_states_sha256": manifest["states_sha256"],
         "graph_identity_transitions_sha256": manifest["transitions_sha256"],
         "status": "PASS",
@@ -348,7 +448,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="mode", required=True)
     ex = sub.add_parser("exhaustive")
-    ex.add_argument("--max-history", type=int, default=6)
+    ex.add_argument(
+        "--max-history",
+        type=int,
+        choices=range(2, 7),
+        default=6,
+        help="largest bounded history to check (2..6 only)",
+    )
     ex.add_argument("--workdir", type=Path, default=Path("upper_graphs"))
     sa = sub.add_parser("sample")
     sa.add_argument("--graph-dir", type=Path, required=True)

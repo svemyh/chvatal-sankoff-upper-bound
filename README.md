@@ -39,6 +39,11 @@ uv run --frozen python upper_engine.py build-graph --history 10 \
 uv run --frozen python verify_upper.py \
   --graph-root "$REPLAY_ROOT/upper_graphs" \
   --checkpoint-root "$REPLAY_ROOT/checkpoints"
+
+# Optional lineage, calibration, and diagnostic checks:
+uv run --frozen python verify_upper.py --with-provenance \
+  --graph-root "$REPLAY_ROOT/upper_graphs" \
+  --checkpoint-root "$REPLAY_ROOT/checkpoints"
 ```
 
 This deliberately keeps generated graphs and downloaded arrays out of the tracked
@@ -57,21 +62,29 @@ PASS: exact feasible witness proves gamma_2 <= 0.824443 < 0.826280
 an integer comparison `S_i <= Lambda * V_i` against the `Lambda` pinned in the script, and
 the final bound comparison uses exact rational log enclosures with explicit remainder
 bounds. No floating-point value decides anything. The commonly quoted "72 seconds" is the
-final scan only; the hour before it is rebuilding the machines.
+historical combined replay, not a promised runtime for the current split verifier; rebuilding
+the h=10 machine remains the dominant setup cost.
 
-What it checks:
-- SHA-256 authentication of graphs, witness checkpoints, and the certificate (plus the
-  primary-source PDF if you supply your own copy; it is ACM-copyrighted and not
-  redistributed here, see `scripts/fetch_source_paper.sh`);
+The default command is deliberately limited to proof-critical checks:
+
+- SHA-256 authentication of the record graph and witness checkpoint;
+- strict positivity, declared scale, and successor-index closure;
 - the feasibility inequality at every one of the 400,253,317 states (integer arithmetic);
 - the final comparison `2 log(2z)/log(lambda) <= 824443/1000000` in exact rationals;
-- the hash-chained per-sweep log covering all 113 iterations and the exact rescale;
+- a read-only assertion that the verifier modified no artifact.
+
+`python3 verify_upper.py --with-provenance` additionally checks the saved certificate JSON,
+source PDF when present, machine-sizing record, hash-chained sweep log, exact rescale lineage,
+h=8 calibration, and the following diagnostic controls:
+
 - **negative control**: the same witness does *not* prove the next target 0.824442;
 - **sharpness control**: the h=8 calibration witness does *not* prove better than Lueker's
   published 0.826280, so the pipeline is not silently optimistic;
 - **adversarial control**: a deliberately corrupted witness *is* rejected at the per-state
   test (proving the check can fail);
-- a read-only assertion that the verifier modified no artifact.
+
+Those provenance and diagnostic checks increase confidence in how the witness was produced,
+but they are not premises of the finite certificate.
 
 ## How to know the number is right
 
@@ -98,12 +111,16 @@ uv run --frozen python verify_graph_oracle.py sample \
     --samples 20000 --seed 20260825
 ```
 
-Results shipped here: exhaustive agreement for h = 2..6 (1,979,120 transitions at h=6), and
+The exhaustive command also validates the exact start state, unique canonical quotient
+representatives, successor closure, reachability, and reference completeness. Results shipped
+here: exhaustive agreement for h = 2..6 (1,979,120 transitions at h=6), and
 760,000 transitions of the h=10 machine recomputed with zero mismatches
 (`h10-oracle-spotcheck.json`). This is strong evidence, not proof: the sample covers a small
 fraction of the machine, and a misreading of Figure 7 common to both implementations would
 escape both. The h=8 calibration reproducing Lueker's published constant is independent
-evidence against that failure mode.
+evidence against that failure mode. The full-h10 command exists but has not been run; no
+`h10-oracle-full.json` result has been produced. See
+[`docs/FULL_H10_ORACLE.md`](docs/FULL_H10_ORACLE.md) for the future-run contract.
 
 ## Reproduce from scratch
 
@@ -122,18 +139,20 @@ the fully explicit bounded commands and the h=10 migration boundary.
 
 | path | contents |
 |---|---|
-| `verify_upper.py` | standalone verifier for the artifact of record |
-| `upper_engine.py`, `upper_oracle.py` | graph builder, power iteration, exact certification |
+| `verify_upper.py` | proof-critical verifier, with optional provenance validation |
+| `upper_engine.py`, `upper_oracle.py` | deterministic graph builder, power iteration, exact certification/reference model |
+| `upper_contract.py` | builder-independent structural and semantic graph contract |
 | `upper_graph_builder.c`, `upper_state_builder.c` | C kernels, compiled on demand |
 | `upper-h10-certificate.json` | the certificate parameters and hashes |
 | `checkpoints/` | checkpoint metadata (+ small h=8 calibration witness; large states fetched) |
 | `paper/` | manuscript (LaTeX + PDF) |
 | `VERIFICATION.md` | plain-language account of the trust chain and its limits |
+| `docs/FULL_H10_ORACLE.md` | unexecuted future full-h10 command and acceptance gate |
 | `verify_graph_oracle.py` | independent oracle cross-check of the built automaton (`exhaustive` / `sample` / `full`) |
 | `verify_lueker_table.py` | reproduces all seven rows of Lueker's published Table II |
 | `lueker-table-ii-reproduction.json` | result of that external agreement check |
 | `h10-oracle-spotcheck.json` | result of the h=10 oracle sample check |
-| `test_upper_engine.py`, `test_upper_oracle.py`, `test_reproduction.py` | unit and bounded clean-clone tests |
+| `test_upper_engine.py`, `test_upper_oracle.py`, `test_upper_contract.py`, `test_reproduction.py` | unit, proof-contract, and bounded clean-clone tests |
 | `scripts/fetch_source_paper.sh` | authenticates your own copy of Lueker 2009 (ACM-copyrighted, not redistributed) |
 
 ## Citation
