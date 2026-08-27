@@ -1,1 +1,2 @@
+# Exact fallback pin; the verified build uses the locked `paper` dependency group.
 matplotlib==3.9.4
