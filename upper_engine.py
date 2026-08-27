@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from fractions import Fraction
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -13,6 +15,7 @@ import os
 from pathlib import Path
 import platform
 import resource
+import shlex
 import subprocess
 import tempfile
 import time
@@ -25,6 +28,7 @@ import numpy as np
 REJECT = np.uint32(0xFFFFFFFF)
 WEIGHT_SCALE = 1 << 32
 WITNESS_SCALE = 1 << 26
+UINT64_MAX = (1 << 64) - 1
 RESERVE_BYTES = 20 * (1 << 30)
 GRAPH_COUNTS = {
     2: 7,
@@ -37,7 +41,7 @@ GRAPH_COUNTS = {
     9: 51425006,
     10: 400253317,
 }
-KERNEL_VERSION = "upper-fixed-v1"
+KERNEL_VERSION = "upper-fixed-v2-exact-normalization"
 
 
 def utc_now() -> str:
@@ -98,15 +102,86 @@ def atomic_npy(path: Path, values: np.ndarray) -> str:
         raise
 
 
+def compiler_command() -> list[str]:
+    """Return the user-selected C compiler command.
+
+    ``CC`` may contain a launcher and flags (for example ``ccache clang``).
+    Compiling once per Python process makes changing ``CC`` effective even if
+    a binary from a previous invocation is present.
+    """
+
+    command = shlex.split(os.environ.get("CC", "cc"))
+    if not command:
+        raise ValueError("CC must name a C compiler")
+    return command
+
+
+@lru_cache(maxsize=1)
 def compile_graph_builder() -> Path:
     source = Path(__file__).with_name("upper_graph_builder.c")
     output = Path(__file__).with_name(".upper_graph_builder")
-    if not output.exists() or output.stat().st_mtime_ns < source.stat().st_mtime_ns:
-        subprocess.run(
-            ["clang", "-O3", "-std=c11", "-Wall", "-Wextra", "-Werror", str(source), "-o", str(output)],
-            check=True,
-        )
+    subprocess.run(
+        compiler_command()
+        + [
+            "-O3",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            str(source),
+            "-o",
+            str(output),
+        ],
+        check=True,
+    )
     return output
+
+
+@lru_cache(maxsize=1)
+def load_exact_normalizer():
+    """Compile and load the exact uint128 normalization kernel."""
+
+    source = Path(__file__).with_name("upper_exact.c")
+    system = platform.system()
+    if system == "Darwin":
+        output = Path(__file__).with_name(".upper_exact.dylib")
+        shared_flags = ["-dynamiclib"]
+    elif system == "Linux":
+        output = Path(__file__).with_name(".upper_exact.so")
+        shared_flags = ["-shared", "-fPIC"]
+    else:
+        raise RuntimeError(
+            "exact normalization supports macOS and Linux with a C11 compiler "
+            "providing unsigned __int128"
+        )
+    subprocess.run(
+        compiler_command()
+        + [
+            "-O3",
+            "-std=c11",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            *shared_flags,
+            str(source),
+            "-o",
+            str(output),
+        ],
+        check=True,
+    )
+    library = ctypes.CDLL(str(output))
+    function = library.normalize_exact_u64_to_u32
+    function.argtypes = [
+        ctypes.POINTER(ctypes.c_uint64),
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_size_t,
+        ctypes.c_uint64,
+        ctypes.c_uint64,
+    ]
+    function.restype = ctypes.c_int
+    # Keep the library alive for as long as the returned function is cached.
+    function._library = library  # type: ignore[attr-defined]
+    return function
 
 
 def expected_states(history: int) -> int:
@@ -205,6 +280,8 @@ def authenticate_graph(graph_dir: Path) -> dict[str, Any]:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("kind") != "lueker-upper-dense-graph":
         raise ValueError("unexpected graph kind")
+    if manifest.get("state_dtype") != "<u8" or manifest.get("transition_dtype") != "<u4":
+        raise ValueError("graph integer files must be explicitly little-endian")
     for prefix in ("states", "transitions"):
         path = graph_dir / manifest[f"{prefix}_file"]
         if path.stat().st_size != manifest[f"{prefix}_bytes"]:
@@ -266,19 +343,43 @@ def apply_fixed(transitions, weights, witness, output):
         output[state] = total
 
 
-@numba.njit(parallel=True, cache=True)
 def normalize_fixed(raw, output, witness_scale, raw_max):
-    factor = float(witness_scale) / float(raw_max)
-    for state in numba.prange(raw.size):
-        if raw[state] == raw_max:
-            value = witness_scale
-        else:
-            value = int(float(raw[state]) * factor)
-        if value < 1:
-            value = 1
-        elif value > witness_scale:
-            value = witness_scale
-        output[state] = np.uint32(value)
+    """Set ``output = clamp(floor(raw * scale / raw_max), 1, scale)`` exactly.
+
+    Products require up to 96 bits at the supported uint64/uint32 limits.  The
+    C kernel uses unsigned ``__int128`` so no binary floating-point operation,
+    architecture-specific rounding mode, or multiply overflow can affect a
+    checkpoint's lineage.
+    """
+
+    if (
+        raw.dtype != np.uint64
+        or output.dtype != np.uint32
+        or raw.shape != output.shape
+        or not raw.flags.c_contiguous
+        or not output.flags.c_contiguous
+    ):
+        raise ValueError("normalization requires same-shaped contiguous uint64/uint32 arrays")
+    witness_scale = int(witness_scale)
+    raw_max = int(raw_max)
+    if not 1 <= witness_scale <= int(np.iinfo(np.uint32).max):
+        raise ValueError("witness scale must fit positive uint32")
+    if not 1 <= raw_max <= UINT64_MAX:
+        raise ValueError("raw maximum must fit positive uint64")
+    function = load_exact_normalizer()
+    status = function(
+        raw.ctypes.data_as(ctypes.POINTER(ctypes.c_uint64)),
+        output.ctypes.data_as(ctypes.POINTER(ctypes.c_uint32)),
+        raw.size,
+        witness_scale,
+        raw_max,
+    )
+    if status != 0:
+        messages = {
+            1: "invalid normalization argument",
+            2: "raw value exceeds declared raw maximum",
+        }
+        raise ValueError(messages.get(status, f"exact normalization failed with status {status}"))
 
 
 @numba.njit(cache=True)
@@ -289,17 +390,39 @@ def exact_ratio_scan(raw, witness):
     for state in range(raw.size):
         value = np.uint64(witness[state])
         total = raw[state]
-        ceiling = (total + value - np.uint64(1)) // value
         floor = total // value
+        ceiling = floor + np.uint64(total % value != 0)
         if ceiling > lambda_numerator:
             lambda_numerator = ceiling
         if floor < lambda_floor:
             lambda_floor = floor
+    # Compare by quotient/remainder instead of multiplying lambda_numerator by
+    # the witness.  The multiplication can overflow even when the mathematical
+    # inequality holds near the uint64 boundary.
     for state in range(raw.size):
-        if raw[state] > lambda_numerator * np.uint64(witness[state]):
+        value = np.uint64(witness[state])
+        floor = raw[state] // value
+        if floor > lambda_numerator or (
+            floor == lambda_numerator and raw[state] % value != 0
+        ):
             failing = state
             break
     return lambda_numerator, lambda_floor, failing
+
+
+def fixed_point_preflight(weights, witness_scale: int) -> int:
+    """Return the worst row sum after proving sums and ceilings fit uint64."""
+
+    witness_scale = int(witness_scale)
+    if not 1 <= witness_scale <= int(np.iinfo(np.uint32).max):
+        raise ValueError("witness scale must fit positive uint32")
+    # NumPy's uint64 reduction itself wraps, so promote every term to Python int.
+    maximum_full_row_sum = sum(int(weight) for weight in weights) * witness_scale
+    if maximum_full_row_sum > UINT64_MAX:
+        raise OverflowError("fixed-point row-sum preflight failed")
+    if maximum_full_row_sum + witness_scale - 1 > UINT64_MAX:
+        raise OverflowError("fixed-point ceiling preflight failed")
+    return maximum_full_row_sum
 
 
 def exact_target_check(
@@ -445,6 +568,7 @@ def append_log_once(log_path: Path, record: dict[str, Any]) -> None:
     sweep_id = record["sweep_id"]
     if log_path.exists() and sweep_id in log_path.read_text(encoding="utf-8"):
         return
+    log_path.parent.mkdir(parents=True, exist_ok=True)
     line = f"- {record['timestamp']} upper-sweep `{canonical_json(record)}`\n"
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(line)
@@ -461,6 +585,7 @@ def certify_witness(
     target_denominator: int,
     raw_workspace=None,
 ):
+    fixed_point_preflight(weights, int(witness.max()))
     raw = np.empty(witness.size, dtype=np.uint64) if raw_workspace is None else raw_workspace
     started = time.perf_counter()
     apply_fixed(transitions, weights, witness, raw)
@@ -497,6 +622,14 @@ def run(
     threads: int,
     witness_scale: int = WITNESS_SCALE,
 ) -> dict[str, Any]:
+    if max_iterations < 1:
+        raise ValueError("maximum iterations must be positive")
+    if tolerance_units < 0:
+        raise ValueError("tolerance units must be nonnegative")
+    if target_numerator < 1 or target_denominator < 1:
+        raise ValueError("target numerator and denominator must be positive")
+    if threads < 1:
+        raise ValueError("thread count must be positive")
     run_started = time.perf_counter()
     graph_manifest, _states, transitions = load_graph(graph_dir)
     parameters = checkpoint_parameters(
@@ -505,8 +638,7 @@ def run(
     if not (checkpoint_dir / "latest.json").exists():
         initialize_checkpoint(checkpoint_dir, parameters)
     weights, _exact, _errors = upward_weights(graph_manifest["history"], z)
-    if int(weights.sum()) * witness_scale >= 1 << 64:
-        raise OverflowError("fixed-point row-sum preflight failed")
+    fixed_point_preflight(weights, witness_scale)
     numba.set_num_threads(threads)
     parameters_on_disk, latest, witness_on_disk = load_checkpoint(checkpoint_dir, parameters)
     witness = np.array(witness_on_disk, copy=True)
@@ -537,7 +669,7 @@ def run(
         checkpoint_seconds = time.perf_counter() - checkpoint_started
         timestamp = utc_now()
         record = {
-            "kind": "upper-fixed-v1",
+            "kind": KERNEL_VERSION,
             "timestamp": timestamp,
             "iteration": iteration,
             "history": graph_manifest["history"],
@@ -609,6 +741,7 @@ def certify_checkpoint(graph_dir: Path, checkpoint_dir: Path) -> dict[str, Any]:
     )
     _parameters, latest, witness = load_checkpoint(checkpoint_dir, expected, mmap_mode="r")
     weights, exact, errors = upward_weights(graph_manifest["history"], z)
+    maximum_full_row_sum = fixed_point_preflight(weights, expected["witness_scale"])
     result = certify_witness(
         transitions,
         weights,
@@ -638,9 +771,9 @@ def certify_checkpoint(graph_dir: Path, checkpoint_dir: Path) -> dict[str, Any]:
             "stored_state_error_units": 0,
             "integer_sum_error_units": 0,
             "feasibility_comparison_error_units": 0,
-            "overflow_preflight": int(weights.sum()) * expected["witness_scale"] < 1 << 64,
-            "maximum_full_row_sum": int(weights.sum()) * expected["witness_scale"],
-            "uint64_max": (1 << 64) - 1,
+            "overflow_preflight": True,
+            "maximum_full_row_sum": maximum_full_row_sum,
+            "uint64_max": UINT64_MAX,
             "machine": platform.platform(),
         }
     )

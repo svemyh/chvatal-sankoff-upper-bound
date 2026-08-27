@@ -1,9 +1,11 @@
 from fractions import Fraction
 import json
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -18,10 +20,12 @@ from upper_engine import (
     exact_log_interval,
     exact_ratio_scan,
     exact_target_check,
+    fixed_point_preflight,
     load_checkpoint,
     load_graph,
     normalize_fixed,
     certify_checkpoint,
+    compiler_command,
     compile_graph_builder,
     rescale_checkpoint,
     run,
@@ -32,6 +36,12 @@ from upper_oracle import UpperState, apply_operator, build_automaton
 
 
 class UpperEngineTests(unittest.TestCase):
+
+    def test_compiler_command_respects_cc(self):
+        with patch.dict(os.environ, {"CC": "ccache clang -arch arm64"}):
+            self.assertEqual(
+                compiler_command(), ["ccache", "clang", "-arch", "arm64"]
+            )
 
     def test_keyless_builder_is_byte_identical_to_legacy_builder(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -104,6 +114,15 @@ class UpperEngineTests(unittest.TestCase):
                 )
                 np.testing.assert_array_equal(transitions, expected)
 
+                self.assertEqual(
+                    (graph_dir / "states.u64").read_bytes(),
+                    np.asarray(states, dtype="<u8").tobytes(),
+                )
+                self.assertEqual(
+                    (graph_dir / "transitions.u32").read_bytes(),
+                    np.asarray(expected, dtype="<u4").tobytes(),
+                )
+
     def test_fixed_operator_dominates_exact_operator_and_scan_is_exact(self):
         with tempfile.TemporaryDirectory() as temporary:
             graph_dir = Path(temporary) / "graph"
@@ -125,7 +144,7 @@ class UpperEngineTests(unittest.TestCase):
             self.assertTrue(np.any(raw > np.uint64(lam - 1) * witness.astype(np.uint64)))
             self.assertLessEqual(int(floor), int(lam))
 
-    def test_five_fixed_sweeps_match_literal_python_reference(self):
+    def test_five_exact_fixed_sweeps_match_literal_python_reference(self):
         with tempfile.TemporaryDirectory() as temporary:
             graph_dir = Path(temporary) / "graph"
             build_graph(2, graph_dir)
@@ -148,13 +167,40 @@ class UpperEngineTests(unittest.TestCase):
                 raw_max = max(raw_reference)
                 normalize_fixed(raw_fast, next_fast, WITNESS_SCALE, raw_max)
                 reference = [
-                    WITNESS_SCALE
-                    if value == raw_max
-                    else max(1, min(WITNESS_SCALE, int(float(value) * WITNESS_SCALE / raw_max)))
+                    max(1, min(WITNESS_SCALE, value * WITNESS_SCALE // raw_max))
                     for value in raw_reference
                 ]
                 self.assertEqual(list(map(int, next_fast)), reference)
                 fast = next_fast
+
+    def test_exact_normalization_covers_full_uint64_uint32_boundary(self):
+        raw_max = (1 << 64) - 1
+        scale = (1 << 32) - 1
+        values = np.array(
+            [0, 1, (1 << 53) - 1, 1 << 53, (1 << 63) + 12345, raw_max - 1, raw_max],
+            dtype=np.uint64,
+        )
+        output = np.empty(values.size, dtype=np.uint32)
+        normalize_fixed(values, output, scale, raw_max)
+        expected = [max(1, min(scale, int(value) * scale // raw_max)) for value in values]
+        self.assertEqual(list(map(int, output)), expected)
+
+    def test_ratio_scan_and_ceiling_preflight_cover_uint64_boundary(self):
+        maximum = (1 << 64) - 1
+        raw = np.array([maximum, maximum - 1], dtype=np.uint64)
+        witness = np.array([2, 3], dtype=np.uint32)
+        ceiling, floor, failing = exact_ratio_scan(raw, witness)
+        self.assertEqual(int(ceiling), 1 << 63)
+        self.assertEqual(int(floor), (maximum - 1) // 3)
+        self.assertEqual(int(failing), -1)
+
+        # The row sum itself fits, but adding scale-1 for the classic ceiling
+        # formula would overflow.  This is the exact boundary the standalone
+        # verifier already rejects and the generic engine must also reject.
+        weights = np.array([maximum // 3], dtype=np.uint64)
+        with self.assertRaisesRegex(OverflowError, "ceiling preflight"):
+            fixed_point_preflight(weights, 3)
+        self.assertEqual(fixed_point_preflight(np.array([maximum], dtype=np.uint64), 1), maximum)
 
     def test_exact_log_target_matches_direct_small_power_comparison(self):
         for value in (Fraction(1, 5), Fraction(2, 5), Fraction(3, 7), Fraction(9, 10)):

@@ -100,6 +100,11 @@ term is needed.  Floating point is used only to propose the next witness during
 optimization.  The saved integers are treated as a new exact witness in every
 certificate scan.
 
+This paragraph describes the historical v1 lineage. The current generation engine uses an
+exact unsigned-128-bit normalization kernel and deliberately starts a v2 lineage; the
+published v1 witness remains unchanged and is replayed by `verify_upper.py`. See
+`REPRODUCE.md` for the migration boundary.
+
 The worst-case preflight row sum is
 `3,694,837,743,432,499,200`, below `2^64-1` by
 `14,751,906,330,277,052,415`.  The preflight and the measured final raw maximum
@@ -169,4 +174,3 @@ It returned `status: PASS`, `feasible: true`, `target_pass: true`,
 `failing_state: -1`, and all three integer feasibility error fields equal to
 zero.  `LOG.md` contains the 113 UTC `upper-sweep` records, the exact rescale
 record, and the final run milestone.
-

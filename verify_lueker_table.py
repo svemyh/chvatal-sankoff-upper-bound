@@ -49,7 +49,15 @@ TABLE_II = {
 }
 
 
-def reproduce(history: int, workdir: Path) -> dict:
+def reproduce(
+    history: int,
+    workdir: Path,
+    *,
+    max_iterations: int,
+    tolerance_units: int,
+    threads: int,
+    witness_scale: int,
+) -> dict:
     published_states, z, published_bound = TABLE_II[history]
     started = time.perf_counter()
 
@@ -70,12 +78,13 @@ def reproduce(history: int, workdir: Path) -> dict:
         graph_dir=graph_dir,
         checkpoint_dir=checkpoint_dir,
         z=z,
-        max_iterations=400,
-        tolerance_units=256,
+        max_iterations=max_iterations,
+        tolerance_units=tolerance_units,
         target_numerator=published_bound.numerator,
         target_denominator=published_bound.denominator,
         log_path=workdir / "table.log",
-        threads=2,
+        threads=threads,
+        witness_scale=witness_scale,
     )
     certified = certify_checkpoint(graph_dir, checkpoint_dir)
     lam_n = int(certified["lambda_numerator"])
@@ -135,6 +144,10 @@ def main() -> int:
     parser.add_argument("--max-history", type=int, default=7)
     parser.add_argument("--workdir", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--max-iterations", type=int, default=400)
+    parser.add_argument("--tolerance-units", type=int, default=256)
+    parser.add_argument("--threads", type=int, default=2)
+    parser.add_argument("--witness-scale", type=int, default=1 << 26)
     args = parser.parse_args()
 
     temporary = None
@@ -145,9 +158,26 @@ def main() -> int:
         workdir = args.workdir
         workdir.mkdir(parents=True, exist_ok=True)
 
-    rows = [reproduce(h, workdir) for h in range(2, args.max_history + 1)]
+    rows = [
+        reproduce(
+            h,
+            workdir,
+            max_iterations=args.max_iterations,
+            tolerance_units=args.tolerance_units,
+            threads=args.threads,
+            witness_scale=args.witness_scale,
+        )
+        for h in range(2, args.max_history + 1)
+    ]
     payload = {
         "source": "Lueker, J. ACM 56(3), 2009, Table II",
+        "parameters": {
+            "max_history": args.max_history,
+            "max_iterations": args.max_iterations,
+            "tolerance_units": args.tolerance_units,
+            "threads": args.threads,
+            "witness_scale": args.witness_scale,
+        },
         "rows": rows,
         "rows_reproduced": len(rows),
         "status": "PASS",

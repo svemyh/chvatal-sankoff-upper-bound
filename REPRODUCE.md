@@ -1,103 +1,203 @@
 # Reproducing γ₂ ≤ 0.824443
 
-Two paths. Both end with `python3 verify_upper.py` printing
-`PASS: exact feasible witness proves gamma_2 <= 0.824443 < 0.826280`.
+There are two distinct reproducibility paths:
 
-Machine used for the original run: 18-core Apple Silicon desktop, 128 GB RAM.
-The record run (113 power-iteration sweeps at h=10 plus the rescale) took
-10,265 s (2.85 h) and peaked at 56.2 GiB RSS. Graph builds: h=8 in minutes,
-h=10 in roughly an hour and ~60 GB of disk.
+1. Replay the shipped h=10 certificate in fresh output directories. This reproduces the
+   published claim and does not run power iteration.
+2. Generate a new deterministic witness from scratch. This path is tested and hash-stable
+   at bounded histories. A new h=10 campaign is intentionally not part of this repository
+   update; see the migration boundary below.
 
-## Path A — verify the shipped certificate (~90 min wall, mostly graph build)
+## Locked environment and supported platform
+
+Install `uv` 0.10.2, then run:
 
 ```sh
-pip install -r requirements.txt
-sh scripts/fetch_witness.sh
-python3 upper_engine.py build-graph --history 8  --graph-dir upper_graphs/h8
-python3 upper_engine.py build-graph --history 10 --graph-dir upper_graphs/h10
-python3 verify_upper.py
+uv sync --frozen
+uv run --frozen python -VV
+uv run --frozen python -c 'import numpy,numba,llvmlite; print(numpy.__version__, numba.__version__, llvmlite.__version__)'
 ```
 
-The graphs are deterministic; the verifier authenticates them against pinned
-SHA-256 identities (h=8: `4c2514a4…`, h=10: `e4db7c10…`) before using them, so
-a corrupted or divergent build fails loudly.
+`.python-version`, `pyproject.toml`, and `uv.lock` pin CPython 3.11.14, NumPy 1.26.4,
+Numba 0.59.1, llvmlite 0.42.0, and uv 0.10.2. `requirements.txt` carries matching exact
+fallback pins, but the verified commands use the lock.
 
-## Path B — re-derive the witness from scratch (no downloads; ~4 h)
+Graph generation and exact normalization support macOS and Linux with a Clang or
+GCC-compatible C11 compiler that provides `unsigned __int128`. The engine respects `CC`:
 
 ```sh
-pip install -r requirements.txt
-python3 upper_engine.py build-graph --history 8  --graph-dir upper_graphs/h8
-python3 upper_engine.py build-graph --history 10 --graph-dir upper_graphs/h10
+CC=clang uv run --frozen python upper_engine.py --help
+```
 
-# calibration gate: reproduce Lueker's 0.826280 at h=8
-python3 upper_engine.py run --graph-dir upper_graphs/h8 \
-  --checkpoint-dir checkpoints/upper-calibration-h8 \
-  --z-numerator 3209 --z-denominator 10000
+Graph `uint64` states and `uint32` successors are serialized explicitly little-endian and
+their manifests are rejected unless they declare `<u8` and `<u4`. The unused experimental
+matrix-free h=11 state builder remains little-endian-host-only and fails explicitly on any
+other host.
 
-# the record run at h=10 (witness scale 2^26)
-python3 upper_engine.py run --graph-dir upper_graphs/h10 \
-  --checkpoint-dir checkpoints/upper-h10 \
-  --z-numerator 3209 --z-denominator 10000
+## Path A — replay the shipped certificate (~90 minutes)
 
-# exact rescale of the witness to scale 2^31 (this is the certified lineage)
-python3 upper_engine.py rescale-checkpoint --graph-dir upper_graphs/h10 \
-  --source-dir checkpoints/upper-h10 --target-dir checkpoints/upper-h10-q31 \
-  --new-witness-scale 2147483648
+This needs at least 80 GB free disk and 64 GiB RAM. The verifier's recorded peak was about
+41 GiB RSS. The h=10 graph is about 60 GB; the two downloaded arrays total about 3 GB.
 
-# continue iteration at the finer scale until the certificate passes
-python3 upper_engine.py run --graph-dir upper_graphs/h10 \
-  --checkpoint-dir checkpoints/upper-h10-q31 \
+```sh
+uv sync --frozen
+REPLAY_ROOT=reproduction/shipped-v1.0.0
+test ! -e "$REPLAY_ROOT"
+mkdir -p "$REPLAY_ROOT/upper_graphs"
+sh scripts/fetch_witness.sh "$REPLAY_ROOT/checkpoints"
+
+uv run --frozen python upper_engine.py build-graph \
+  --history 8 \
+  --graph-dir "$REPLAY_ROOT/upper_graphs/h8"
+uv run --frozen python upper_engine.py build-graph \
+  --history 10 \
+  --graph-dir "$REPLAY_ROOT/upper_graphs/h10"
+
+uv run --frozen python verify_upper.py \
+  --graph-root "$REPLAY_ROOT/upper_graphs" \
+  --checkpoint-root "$REPLAY_ROOT/checkpoints"
+```
+
+The final command must print JSON status `PASS` and:
+
+```text
+PASS: exact feasible witness proves gamma_2 <= 0.824443 < 0.826280
+```
+
+The fresh checkpoint root is populated with authenticated copies of the tracked h=8
+calibration and h=10 metadata plus the two authenticated release arrays. Nothing relies on
+the deliberately absent h=10 arrays under the tracked `checkpoints/` paths.
+
+## Path B — deterministic bounded generation from scratch
+
+This complete h=4 recipe uses a fresh output directory and makes the target, scale,
+tolerance, iteration limit, and thread count explicit:
+
+```sh
+uv sync --frozen
+BOUNDED_ROOT=reproduction/from-scratch-h4
+test ! -e "$BOUNDED_ROOT"
+mkdir -p "$BOUNDED_ROOT/logs"
+
+uv run --frozen python upper_engine.py build-graph \
+  --history 4 \
+  --graph-dir "$BOUNDED_ROOT/graphs/h4"
+uv run --frozen python upper_engine.py run \
+  --graph-dir "$BOUNDED_ROOT/graphs/h4" \
+  --checkpoint-dir "$BOUNDED_ROOT/checkpoints/h4" \
+  --z-numerator 2642 \
+  --z-denominator 10000 \
+  --target-numerator 835072 \
+  --target-denominator 1000000 \
+  --witness-scale 67108864 \
+  --tolerance-units 256 \
+  --max-iterations 400 \
+  --threads 2 \
+  --log "$BOUNDED_ROOT/logs/h4.log"
+uv run --frozen python upper_engine.py certify \
+  --graph-dir "$BOUNDED_ROOT/graphs/h4" \
+  --checkpoint-dir "$BOUNDED_ROOT/checkpoints/h4" \
+  --output "$BOUNDED_ROOT/h4-certificate.json"
+```
+
+The certificate must report `status: PASS`. The automated clean-clone smoke test repeats a
+fresh h=3 generation twice and requires byte-identical graph and witness hashes. It also
+reproduces Table II through h=4:
+
+```sh
+uv run --frozen python -m unittest -v test_reproduction.py
+
+TABLE_ROOT=reproduction/lueker-table-h4
+test ! -e "$TABLE_ROOT"
+mkdir -p "$TABLE_ROOT"
+uv run --frozen python verify_lueker_table.py \
+  --max-history 4 \
+  --max-iterations 400 \
+  --tolerance-units 256 \
+  --witness-scale 67108864 \
+  --threads 2 \
+  --workdir "$TABLE_ROOT/work" \
+  --output "$TABLE_ROOT/result.json"
+```
+
+## h=10 deterministic migration boundary
+
+The published h=10 witness remains valid and Path A still verifies it exactly. Its original
+power-iteration lineage used binary floating-point only to normalize each proposed witness;
+the final proof scan was always integer-exact. The current engine replaces that proposal
+step with
+
+```text
+V_next[i] = clamp(floor(raw[i] * witness_scale / raw_max), 1, witness_scale)
+```
+
+computed by an overflow-safe unsigned-128-bit C kernel. Consequently, new checkpoints are
+tagged `upper-fixed-v2-exact-normalization` and cannot resume the historical v1 lineage.
+Even a one-unit proposal difference changes all later checkpoint hashes.
+
+A new h=10 run would use the historical schedule below, with every parameter explicit, but
+its convergence iteration and hashes must be treated as new results until the expensive run
+is actually performed:
+
+```sh
+H10_ROOT=reproduction/new-deterministic-h10
+test ! -e "$H10_ROOT"
+mkdir -p "$H10_ROOT/logs"
+
+uv run --frozen python upper_engine.py build-graph \
+  --history 8 --graph-dir "$H10_ROOT/graphs/h8"
+uv run --frozen python upper_engine.py run \
+  --graph-dir "$H10_ROOT/graphs/h8" \
+  --checkpoint-dir "$H10_ROOT/checkpoints/calibration-h8" \
   --z-numerator 3209 --z-denominator 10000 \
-  --target-numerator 824443 --target-denominator 1000000
+  --target-numerator 826280 --target-denominator 1000000 \
+  --witness-scale 67108864 --tolerance-units 2048 \
+  --max-iterations 203 --threads 18 \
+  --log "$H10_ROOT/logs/h8.log"
+uv run --frozen python upper_engine.py certify \
+  --graph-dir "$H10_ROOT/graphs/h8" \
+  --checkpoint-dir "$H10_ROOT/checkpoints/calibration-h8" \
+  --output "$H10_ROOT/h8-certificate.json"
 
-# exact certification and the standalone verifier
-python3 upper_engine.py certify --graph-dir upper_graphs/h10 \
-  --checkpoint-dir checkpoints/upper-h10-q31 --output upper-h10-certificate.json
-python3 verify_upper.py
+uv run --frozen python upper_engine.py build-graph \
+  --history 10 --graph-dir "$H10_ROOT/graphs/h10"
+uv run --frozen python upper_engine.py run \
+  --graph-dir "$H10_ROOT/graphs/h10" \
+  --checkpoint-dir "$H10_ROOT/checkpoints/h10-q26" \
+  --z-numerator 3209 --z-denominator 10000 \
+  --target-numerator 824443 --target-denominator 1000000 \
+  --witness-scale 67108864 --tolerance-units 2048 \
+  --max-iterations 100 --threads 18 \
+  --log "$H10_ROOT/logs/h10.log"
+uv run --frozen python upper_engine.py rescale-checkpoint \
+  --graph-dir "$H10_ROOT/graphs/h10" \
+  --source-dir "$H10_ROOT/checkpoints/h10-q26" \
+  --target-dir "$H10_ROOT/checkpoints/h10-q31" \
+  --new-witness-scale 2147483648
+uv run --frozen python upper_engine.py run \
+  --graph-dir "$H10_ROOT/graphs/h10" \
+  --checkpoint-dir "$H10_ROOT/checkpoints/h10-q31" \
+  --z-numerator 3209 --z-denominator 10000 \
+  --target-numerator 824443 --target-denominator 1000000 \
+  --witness-scale 2147483648 --tolerance-units 2048 \
+  --max-iterations 113 --threads 18 \
+  --log "$H10_ROOT/logs/h10.log"
 ```
 
-Note: path B regenerates the witness; power iteration is deterministic given
-the graph and parameters, and the shipped checkpoints' SHA-256 values
-(`docs/UPPER_H10_RESULT.md`) pin the exact states of record.
+Do not feed this new lineage to the shipped-record verifier. Certify it separately only
+after it has actually converged. A full deterministic h=10 campaign is intentionally
+deferred here; it was not run, downloaded, or regenerated as part of this repair. Allow at
+least 80 GB free disk and prefer 96 GiB RAM for such a campaign; the historical run peaked
+at 56.2 GiB RSS.
 
-## Expected key values
-
-| quantity | value |
-|---|---|
-| states (h=10) | 400,253,317 |
-| z | 3209/10000 |
-| λ (numerator / 2³²) | 1,464,651,560 |
-| final iteration | 113 |
-| certified bound | 824443/1000000 |
-| negative control | 824442/1000000 must NOT pass |
-| calibration (h=8) | reproduces 0.826280 (Lueker 2009) |
-
-## Provenance docs
-
-`docs/` contains the campaign's own reports: the source-exact extraction of
-Lueker's theorem (`UPPER_FORMULATION.md`), the calibration report
-(`UPPER_CALIBRATION.md`), the record-run report with timings, hashes, and the
-rescale lineage (`UPPER_H10_RESULT.md`), and the result summary
-(`RESULTS_UPPER.md`).
-
-## Validating the automaton against the oracle
+## Unit and bounded integration tests
 
 ```sh
-python3 verify_graph_oracle.py exhaustive --max-history 6
-python3 verify_graph_oracle.py sample --graph-dir upper_graphs/h10 \
-    --samples 20000 --seed 20260825 --output h10-oracle-spotcheck.json
+uv run --frozen python -m unittest -v \
+  test_upper_engine.py test_upper_oracle.py test_reproduction.py
 ```
 
-Expected: `PASS` for every history 2..6 (exhaustive) and zero mismatches over 760,000
-sampled h=10 transitions. Raising `--samples` costs about 13 ms per row; the fixed cost is
-building a sorted index over the 400M states (~4 min, ~7 GB RAM).
-
-## Unit tests
-
-```sh
-python3 -m unittest test_upper_engine test_upper_oracle
-```
-
-Expected: 9 engine tests and 8 oracle tests, all passing. (The h=11 matrix-free experiments
-from the wider campaign are not part of this artifact; tests depending on them were removed
-rather than shipped half-built.)
+The suite covers the exact normalizer over uint64/uint32 boundary values, the verifier-grade
+ceiling overflow preflight, overflow-safe ratio scanning, explicit little-endian graph bytes,
+restart/rescale behavior, exhaustive oracle agreement through h=4, two independent
+byte-identical bounded generations, and Lueker Table II through h=4.

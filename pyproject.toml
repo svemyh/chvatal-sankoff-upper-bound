@@ -1,0 +1,14 @@
+[project]
+name = "chvatal-sankoff-upper-bound-reproduction"
+version = "0.0.0"
+description = "Reproducibility environment for the Chvatal-Sankoff upper-bound certificate"
+requires-python = "==3.11.*"
+dependencies = [
+  "llvmlite==0.42.0",
+  "numba==0.59.1",
+  "numpy==1.26.4",
+]
+
+[tool.uv]
+package = false
+required-version = "==0.10.2"

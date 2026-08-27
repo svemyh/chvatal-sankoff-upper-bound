@@ -1,8 +1,10 @@
 upper_graphs/
+reproduction/
 checkpoints/upper-h10/state-*.npy
 checkpoints/upper-h10-q31/state-*.npy
 __pycache__/
 .upper_graph_builder
 .upper_state_builder
+.upper_exact.so
 *.dylib
 sources/papers/*.pdf

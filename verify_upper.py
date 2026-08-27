@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import io
 import json
@@ -375,7 +376,7 @@ def tamper_control(graph_dir: Path, checkpoint_dir: Path) -> dict:
     }
 
 
-def verify_log_and_rescale() -> dict:
+def verify_log_and_rescale(checkpoint_root: Path) -> dict:
     entries = {8: [], 10: []}
     for line in (ROOT / "LOG.md").read_text().splitlines():
         if " upper-sweep `" not in line:
@@ -413,8 +414,8 @@ def verify_log_and_rescale() -> dict:
     require(all(record["witness_scale"] == 1 << 26 for record in h10[:100]), "Q26 segment mismatch")
     require(all(record["witness_scale"] == 1 << 31 for record in h10[100:]), "Q31 segment mismatch")
 
-    parent_latest = json.loads((ROOT / "checkpoints/upper-h10/latest.json").read_text())
-    child_parameters = json.loads((ROOT / "checkpoints/upper-h10-q31/parameters.json").read_text())
+    parent_latest = json.loads((checkpoint_root / "upper-h10/latest.json").read_text())
+    child_parameters = json.loads((checkpoint_root / "upper-h10-q31/parameters.json").read_text())
     require(parent_latest["iteration"] == child_parameters["parent_iteration"] == 100, "rescale iteration mismatch")
     require(
         parent_latest["state_sha256"] == child_parameters["parent_state_sha256"],
@@ -423,13 +424,13 @@ def verify_log_and_rescale() -> dict:
     require(child_parameters["rescale_factor"] == 32, "rescale factor mismatch")
 
     parent = np.load(
-        ROOT / "checkpoints/upper-h10" / parent_latest["state_file"],
+        checkpoint_root / "upper-h10" / parent_latest["state_file"],
         allow_pickle=False,
         mmap_mode="r",
     )
-    final_latest = json.loads((ROOT / "checkpoints/upper-h10-q31/latest.json").read_text())
+    final_latest = json.loads((checkpoint_root / "upper-h10-q31/latest.json").read_text())
     final_state = np.load(
-        ROOT / "checkpoints/upper-h10-q31" / final_latest["state_file"],
+        checkpoint_root / "upper-h10-q31" / final_latest["state_file"],
         allow_pickle=False,
         mmap_mode="r",
     )
@@ -444,7 +445,7 @@ def verify_log_and_rescale() -> dict:
     return {"h8_sweeps": 203, "h10_sweeps": 113, "rescaled_child_sha256": child_hash}
 
 
-def verify_benchmark() -> dict:
+def verify_benchmark(graph_root: Path) -> dict:
     benchmark = json.loads((ROOT / "upper-benchmark-results.json").read_text())
     require(benchmark["required_reserve_bytes"] == 20 * (1 << 30), "reserve mismatch")
     require(benchmark["selected_maximum_history"] == 10, "selected history mismatch")
@@ -464,7 +465,7 @@ def verify_benchmark() -> dict:
         == benchmark["required_reserve_bytes"] - rejected["projected_headroom_bytes"],
         "reserve deficit arithmetic mismatch",
     )
-    require(not (ROOT / "upper_graphs/h11").exists(), "rejected h=11 graph unexpectedly exists")
+    require(not (graph_root / "h11").exists(), "rejected h=11 graph unexpectedly exists")
     return {
         "selected_history": 10,
         "minimum_available_bytes": selected["minimum_measured_available_bytes"],
@@ -508,8 +509,12 @@ def verify_saved_certificate(record: dict) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) != 1:
-        raise VerificationError("verify_upper.py takes no arguments")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--graph-root", type=Path, default=ROOT / "upper_graphs")
+    parser.add_argument("--checkpoint-root", type=Path, default=ROOT / "checkpoints")
+    args = parser.parse_args()
+    graph_root = args.graph_root.resolve()
+    checkpoint_root = args.checkpoint_root.resolve()
     source_paper = ROOT / "sources/papers/lueker-2009.pdf"
     artifacts = [
         ROOT / "upper-benchmark-results.json",
@@ -517,13 +522,15 @@ def main() -> int:
         ROOT / "LOG.md",
     ]
     for directory in (
-        ROOT / "upper_graphs/h8",
-        ROOT / "upper_graphs/h10",
-        ROOT / "checkpoints/upper-calibration-h8",
-        ROOT / "checkpoints/upper-h10",
-        ROOT / "checkpoints/upper-h10-q31",
+        graph_root / "h8",
+        graph_root / "h10",
+        checkpoint_root / "upper-calibration-h8",
+        checkpoint_root / "upper-h10",
+        checkpoint_root / "upper-h10-q31",
     ):
         artifacts.extend(sorted(path for path in directory.iterdir() if path.is_file()))
+    if source_paper.is_file():
+        artifacts.append(source_paper)
     before = snapshot(artifacts)
     started = time.perf_counter()
 
@@ -533,7 +540,6 @@ def main() -> int:
     # the formulation in UPPER_FORMULATION.md.
     if source_paper.is_file():
         require(sha256_file(source_paper) == PAPER_SHA256, "paper hash mismatch")
-        artifacts.append(source_paper)
         source_paper_authenticated = True
         print("[source] frozen Lueker paper authenticated", flush=True)
     else:
@@ -543,9 +549,9 @@ def main() -> int:
             "scripts/fetch_source_paper.sh to authenticate it",
             flush=True,
         )
-    benchmark = verify_benchmark()
+    benchmark = verify_benchmark(graph_root)
     calibration = certify(
-        "calibration", ROOT / "upper_graphs/h8", ROOT / "checkpoints/upper-calibration-h8"
+        "calibration", graph_root / "h8", checkpoint_root / "upper-calibration-h8"
     )
     calibration_pass, calibration_terms = exact_target_decision(
         Fraction(3209, 10000), calibration["lambda_numerator"], 826280, 1_000_000
@@ -560,10 +566,10 @@ def main() -> int:
         "the calibration gate is not sharp and the pipeline may be biased",
     )
     tamper = tamper_control(
-        ROOT / "upper_graphs/h8", ROOT / "checkpoints/upper-calibration-h8"
+        graph_root / "h8", checkpoint_root / "upper-calibration-h8"
     )
 
-    record = certify("record", ROOT / "upper_graphs/h10", ROOT / "checkpoints/upper-h10-q31")
+    record = certify("record", graph_root / "h10", checkpoint_root / "upper-h10-q31")
     internal_pass, internal_terms = exact_target_decision(
         Fraction(3209, 10000), record["lambda_numerator"], 826279, 1_000_000
     )
@@ -578,7 +584,7 @@ def main() -> int:
     require(not next_lower_pass, "unexpected 0.824442 target passage")
     require(824443 < 826280, "record comparison is not strict")
     verify_saved_certificate(record)
-    log = verify_log_and_rescale()
+    log = verify_log_and_rescale(checkpoint_root)
 
     after = snapshot(artifacts)
     require(after == before, "verifier modified a certificate artifact")

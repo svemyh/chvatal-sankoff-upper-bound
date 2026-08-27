@@ -30,6 +30,31 @@ static void die_errno(const char *message) {
     exit(2);
 }
 
+static int host_is_little_endian(void) {
+    const uint16_t value = UINT16_C(1);
+    return *((const uint8_t *)&value) == UINT8_C(1);
+}
+
+static uint32_t little_endian_u32(uint32_t value) {
+    if (host_is_little_endian()) return value;
+    return ((value & UINT32_C(0x000000ff)) << 24) |
+           ((value & UINT32_C(0x0000ff00)) << 8) |
+           ((value & UINT32_C(0x00ff0000)) >> 8) |
+           ((value & UINT32_C(0xff000000)) >> 24);
+}
+
+static uint64_t little_endian_u64(uint64_t value) {
+    if (host_is_little_endian()) return value;
+    return ((value & UINT64_C(0x00000000000000ff)) << 56) |
+           ((value & UINT64_C(0x000000000000ff00)) << 40) |
+           ((value & UINT64_C(0x0000000000ff0000)) << 24) |
+           ((value & UINT64_C(0x00000000ff000000)) << 8) |
+           ((value & UINT64_C(0x000000ff00000000)) >> 8) |
+           ((value & UINT64_C(0x0000ff0000000000)) >> 24) |
+           ((value & UINT64_C(0x00ff000000000000)) >> 40) |
+           ((value & UINT64_C(0xff00000000000000)) >> 56);
+}
+
 static uint64_t mix64(uint64_t x) {
     x ^= x >> 30;
     x *= UINT64_C(0xbf58476d1ce4e5b9);
@@ -261,7 +286,7 @@ int main(int argc, char **argv) {
             for (int padding = -(h - 1); padding <= h - 1; ++padding) {
                 uint64_t successor;
                 if (!transition(states[processed], character, padding, h, &successor)) {
-                    row[column++] = REJECT;
+                    row[column++] = little_endian_u32(REJECT);
                     continue;
                 }
                 uint32_t number = find_state(&hash, states, successor);
@@ -284,7 +309,7 @@ int main(int argc, char **argv) {
                     states[state_count++] = successor;
                     insert_state(&hash, successor, number);
                 }
-                row[column++] = number;
+                row[column++] = little_endian_u32(number);
             }
         }
         if (column != columns) die("transition column count mismatch");
@@ -300,8 +325,19 @@ int main(int argc, char **argv) {
         die_errno("cannot close transition output");
     FILE *state_file = fopen(state_path, "wb");
     if (!state_file) die_errno("cannot open state output");
-    if (fwrite(states, sizeof(uint64_t), state_count, state_file) != state_count)
-        die_errno("cannot write states");
+    const size_t state_chunk_capacity = 1U << 20;
+    uint64_t *state_chunk = malloc(state_chunk_capacity * sizeof(uint64_t));
+    if (!state_chunk) die_errno("cannot allocate little-endian state output buffer");
+    for (size_t offset = 0; offset < state_count;) {
+        size_t count = state_count - offset;
+        if (count > state_chunk_capacity) count = state_chunk_capacity;
+        for (size_t index = 0; index < count; ++index)
+            state_chunk[index] = little_endian_u64(states[offset + index]);
+        if (fwrite(state_chunk, sizeof(uint64_t), count, state_file) != count)
+            die_errno("cannot write states");
+        offset += count;
+    }
+    free(state_chunk);
     if (fflush(state_file) != 0 || fclose(state_file) != 0) die_errno("cannot close state output");
     struct rusage usage;
     if (getrusage(RUSAGE_SELF, &usage) != 0) die_errno("getrusage failed");
