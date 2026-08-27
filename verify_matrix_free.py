@@ -361,13 +361,15 @@ def compiler_command() -> list[str]:
 
 def compile_kernel(work_dir: Path) -> tuple[Path, dict[str, str]]:
     source_sha = sha256_file(KERNEL_SOURCE)
-    cache = work_dir / "cache"
-    cache.mkdir(parents=True, exist_ok=True)
-    binary = cache / f"upper_matrix_free-{source_sha[:16]}"
+    runtime_root = work_dir / "runtime"
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    runtime_dir = Path(
+        tempfile.mkdtemp(prefix=f"upper-matrix-free-{source_sha[:16]}-", dir=runtime_root)
+    )
+    os.chmod(runtime_dir, 0o700)
+    binary = runtime_dir / "upper_matrix_free"
     command = compiler_command()
-    if not binary.is_file():
-        temporary = binary.with_name(f".{binary.name}.partial")
-        temporary.unlink(missing_ok=True)
+    try:
         completed = subprocess.run(
             command
             + [
@@ -379,7 +381,7 @@ def compile_kernel(work_dir: Path) -> tuple[Path, dict[str, str]]:
                 "-pthread",
                 str(KERNEL_SOURCE),
                 "-o",
-                str(temporary),
+                str(binary),
             ],
             text=True,
             stdout=subprocess.PIPE,
@@ -389,7 +391,10 @@ def compile_kernel(work_dir: Path) -> tuple[Path, dict[str, str]]:
             raise VerificationError(
                 f"matrix-free C verifier compilation failed:\n{completed.stderr}"
             )
-        os.replace(temporary, binary)
+        os.chmod(binary, 0o500)
+    except BaseException:
+        shutil.rmtree(runtime_dir, ignore_errors=True)
+        raise
     version = subprocess.run(
         command + ["--version"],
         text=True,
@@ -398,6 +403,8 @@ def compile_kernel(work_dir: Path) -> tuple[Path, dict[str, str]]:
         check=False,
     ).stdout.splitlines()[0]
     return binary, {
+        "status": "COMPILED_FRESH",
+        "private_runtime_directory": True,
         "source_sha256": source_sha,
         "binary_sha256": sha256_file(binary),
         "compiler": version,
@@ -421,17 +428,35 @@ def _parse_kernel_result(completed: subprocess.CompletedProcess[str]) -> dict[st
     return result
 
 
-def run_kernel(command: Sequence[str]) -> dict[str, Any]:
-    completed = subprocess.run(
-        list(command),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+def run_kernel(
+    command: Sequence[str], *, executable_sha256: str
+) -> dict[str, Any]:
+    if not command:
+        raise VerificationError("native verifier command is empty")
+    executable = Path(command[0])
+    if not executable.is_file():
+        raise VerificationError(f"native verifier is absent: {executable}")
+    actual_sha256 = sha256_file(executable)
+    if actual_sha256 != executable_sha256:
+        raise VerificationError(
+            "native verifier changed after its fresh compilation: "
+            f"got {actual_sha256}, expected {executable_sha256}"
+        )
+    try:
+        completed = subprocess.run(
+            list(command),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as error:
+        raise VerificationError(
+            f"cannot execute native verifier {executable}: {error}"
+        ) from error
     return _parse_kernel_result(completed)
 
 
-def ensure_index(
+def build_fresh_index(
     kernel: Path,
     work_dir: Path,
     states: Path,
@@ -440,6 +465,7 @@ def ensure_index(
     state_count: int,
     state_sha256: str,
     kernel_source_sha256: str,
+    kernel_binary_sha256: str,
 ) -> tuple[Path, int, dict[str, Any]]:
     capacity = index_capacity(state_count)
     cache = work_dir / "cache"
@@ -455,18 +481,10 @@ def ensure_index(
         "capacity": capacity,
         "bytes": capacity * 4,
         "kernel_source_sha256": kernel_source_sha256,
+        "kernel_binary_sha256": kernel_binary_sha256,
     }
-    if index.is_file() and metadata_path.is_file():
-        try:
-            actual_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            actual_metadata = None
-        if (
-            actual_metadata == expected_metadata
-            and index.stat().st_size == expected_metadata["bytes"]
-        ):
-            return index, capacity, {"status": "REUSED", **expected_metadata}
-
+    index.unlink(missing_ok=True)
+    metadata_path.unlink(missing_ok=True)
     partial = index.with_name(f".{index.name}.partial")
     partial.unlink(missing_ok=True)
     started = time.perf_counter()
@@ -479,12 +497,16 @@ def ensure_index(
             str(state_count),
             str(partial),
             str(capacity),
-        ]
+        ],
+        executable_sha256=kernel_binary_sha256,
     )
+    if partial.stat().st_size != expected_metadata["bytes"]:
+        raise VerificationError("fresh membership index has the wrong size")
     os.replace(partial, index)
     atomic_json(metadata_path, expected_metadata)
     return index, capacity, {
         **result,
+        "status": "BUILT_FRESH",
         "build_seconds": time.perf_counter() - started,
         **expected_metadata,
     }
@@ -525,6 +547,7 @@ def scan_chunk(
     start: int,
     end: int,
     threads: int,
+    kernel_binary_sha256: str,
 ) -> dict[str, Any]:
     started = time.perf_counter()
     result = run_kernel(
@@ -544,7 +567,8 @@ def scan_chunk(
             str(certificate.lambda_numerator),
             str(certificate.witness_scale),
             *(str(weight) for weight in weights),
-        ]
+        ],
+        executable_sha256=kernel_binary_sha256,
     )
     result["scan_seconds"] = time.perf_counter() - started
     return result
@@ -554,32 +578,22 @@ def _checkpoint_chain(previous: str, chunk: dict[str, Any]) -> str:
     return sha256_bytes((previous + canonical_json(chunk)).encode())
 
 
-def _validate_checkpoint(
-    checkpoint: dict[str, Any], immutable: dict[str, Any]
-) -> list[dict[str, Any]]:
-    if checkpoint.get("schema_version") != 1 or checkpoint.get("immutable") != immutable:
-        raise VerificationError("checkpoint does not match this exact verification run")
-    chunks = checkpoint.get("chunks")
-    if not isinstance(chunks, list):
-        raise VerificationError("checkpoint chunk list is invalid")
-    chain = sha256_bytes(canonical_json(immutable).encode())
-    next_row = 0
-    for chunk in chunks:
-        if not isinstance(chunk, dict):
-            raise VerificationError("checkpoint contains an invalid chunk")
-        if chunk.get("start_row") != next_row or chunk.get("rows") != (
-            chunk.get("end_row", -1) - next_row
-        ):
-            raise VerificationError("checkpoint chunks are not a contiguous prefix")
-        stored_chain = chunk.get("chain_sha256")
-        content = {key: value for key, value in chunk.items() if key != "chain_sha256"}
-        chain = _checkpoint_chain(chain, content)
-        if stored_chain != chain:
-            raise VerificationError("checkpoint hash chain is invalid")
-        next_row = int(chunk["end_row"])
-    if checkpoint.get("chain_sha256") != chain:
-        raise VerificationError("checkpoint terminal hash is invalid")
-    return chunks
+def _validate_fresh_chunk_result(
+    result: dict[str, Any], *, start: int, end: int, columns: int
+) -> None:
+    expected_rows = end - start
+    try:
+        reported_start = int(result.get("start_row", -1))
+        reported_end = int(result.get("end_row", -1))
+        reported_rows = int(result.get("rows", -1))
+        accepted = int(result.get("accepted_transitions", -1))
+        rejected = int(result.get("rejected_transitions", -1))
+    except (TypeError, ValueError) as error:
+        raise VerificationError("native verifier reported malformed counts") from error
+    if reported_start != start or reported_end != end or reported_rows != expected_rows:
+        raise VerificationError("native verifier reported the wrong row range")
+    if accepted < 0 or rejected < 0 or accepted + rejected != expected_rows * columns:
+        raise VerificationError("native verifier reported the wrong transition count")
 
 
 def aggregate_chunks(chunks: Sequence[dict[str, Any]]) -> dict[str, Any]:
@@ -614,7 +628,7 @@ def aggregate_chunks(chunks: Sequence[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def scan_with_checkpoint(
+def scan_certified_fresh(
     kernel: Path,
     *,
     certificate: Certificate,
@@ -626,7 +640,7 @@ def scan_with_checkpoint(
     witness_sha256: str,
     witness_offset: int,
     weights: Sequence[int],
-    checkpoint_path: Path,
+    progress_path: Path,
     kernel_source_sha256: str,
     kernel_binary_sha256: str,
     chunk_rows: int,
@@ -635,7 +649,9 @@ def scan_with_checkpoint(
 ) -> tuple[str, dict[str, Any], dict[str, Any]]:
     if chunk_rows < 1 or threads < 1:
         raise VerificationError("chunk rows and threads must be positive")
-    immutable = {
+    invocation = {
+        "invocation_nonce": os.urandom(32).hex(),
+        "certification_mode": "all_rows_fresh_current_invocation",
         "history": certificate.history,
         "state_count": certificate.state_count,
         "columns": certificate.columns,
@@ -651,26 +667,26 @@ def scan_with_checkpoint(
         "kernel_source_sha256": kernel_source_sha256,
         "kernel_binary_sha256": kernel_binary_sha256,
     }
-    initial_chain = sha256_bytes(canonical_json(immutable).encode())
-    if checkpoint_path.is_file():
-        checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
-        chunks = _validate_checkpoint(checkpoint, immutable)
-    else:
-        chunks = []
-        checkpoint = {
-            "schema_version": 1,
-            "kind": "matrix-free-verification-checkpoint",
-            "immutable": immutable,
-            "chunks": chunks,
-            "chain_sha256": initial_chain,
-            "created_at": utc_now(),
-            "updated_at": utc_now(),
-        }
-        atomic_json(checkpoint_path, checkpoint)
+    chain = sha256_bytes(canonical_json(invocation).encode())
+    chunks: list[dict[str, Any]] = []
+    progress = {
+        "schema_version": 2,
+        "kind": "matrix-free-current-invocation-progress",
+        "certifying_resume_supported": False,
+        "proof_credit": "current_process_memory_only",
+        "invocation": invocation,
+        "chunks": chunks,
+        "chain_sha256": chain,
+        "created_at": utc_now(),
+        "updated_at": utc_now(),
+    }
+    # A progress file is a user-facing continuity aid only.  Overwrite it and
+    # retain proof-bearing summaries in this process so no writable cache can
+    # contribute work to a certified result.
+    atomic_json(progress_path, progress)
 
     invocation_chunks = 0
-    next_row = int(chunks[-1]["end_row"]) if chunks else 0
-    resumed_from_row = next_row
+    next_row = 0
     while next_row < certificate.state_count:
         end_row = min(next_row + chunk_rows, certificate.state_count)
         result = scan_chunk(
@@ -685,17 +701,20 @@ def scan_with_checkpoint(
             start=next_row,
             end=end_row,
             threads=threads,
+            kernel_binary_sha256=kernel_binary_sha256,
+        )
+        _validate_fresh_chunk_result(
+            result, start=next_row, end=end_row, columns=certificate.columns
         )
         content = dict(result)
         content.pop("status", None)
-        content["chain_sha256"] = _checkpoint_chain(
-            str(checkpoint["chain_sha256"]), content
-        )
+        chain = _checkpoint_chain(chain, content)
+        content["chain_sha256"] = chain
         chunks.append(content)
-        checkpoint["chunks"] = chunks
-        checkpoint["chain_sha256"] = content["chain_sha256"]
-        checkpoint["updated_at"] = utc_now()
-        atomic_json(checkpoint_path, checkpoint)
+        progress["chunks"] = chunks
+        progress["chain_sha256"] = chain
+        progress["updated_at"] = utc_now()
+        atomic_json(progress_path, progress)
         next_row = end_row
         invocation_chunks += 1
         print(
@@ -711,12 +730,24 @@ def scan_with_checkpoint(
             return (
                 "INCOMPLETE",
                 aggregate_chunks(chunks),
-                {"resumed_from_row": resumed_from_row, "next_row": next_row},
+                {
+                    "fresh_start_row": 0,
+                    "next_row": next_row,
+                    "fresh_chunks": len(chunks),
+                    "cross_invocation_resume": False,
+                    "invocation_scan_chain_sha256": chain,
+                },
             )
     return (
         "PASS",
         aggregate_chunks(chunks),
-        {"resumed_from_row": resumed_from_row, "next_row": next_row},
+        {
+            "fresh_start_row": 0,
+            "next_row": next_row,
+            "fresh_chunks": len(chunks),
+            "cross_invocation_resume": False,
+            "invocation_scan_chain_sha256": chain,
+        },
     )
 
 
@@ -852,7 +883,7 @@ def make_parser() -> argparse.ArgumentParser:
         "--work-dir",
         type=Path,
         default=ROOT / "matrix-free-h10-verification",
-        help="download, derived-index, checkpoint, and evidence directory",
+        help="download, fresh derived-index, progress, and evidence directory",
     )
     parser.add_argument("--states", type=Path, help="authenticated local state-table override")
     parser.add_argument("--witness", type=Path, help="authenticated local witness override")
@@ -909,7 +940,7 @@ def main(argv: list[str] | None = None) -> int:
     del witness
 
     kernel, kernel_details = compile_kernel(work_dir)
-    state_index, capacity, index_details = ensure_index(
+    state_index, capacity, index_details = build_fresh_index(
         kernel,
         work_dir,
         states,
@@ -917,9 +948,10 @@ def main(argv: list[str] | None = None) -> int:
         state_count=certificate.state_count,
         state_sha256=state_sha,
         kernel_source_sha256=kernel_details["source_sha256"],
+        kernel_binary_sha256=kernel_details["binary_sha256"],
     )
     weights = upward_weights(certificate)
-    status, aggregate, resume = scan_with_checkpoint(
+    status, aggregate, fresh_scan = scan_certified_fresh(
         kernel,
         certificate=certificate,
         states=states,
@@ -930,7 +962,7 @@ def main(argv: list[str] | None = None) -> int:
         witness_sha256=witness_sha,
         witness_offset=witness_offset,
         weights=weights,
-        checkpoint_path=work_dir / "verification-checkpoint.json",
+        progress_path=work_dir / "verification-progress.json",
         kernel_source_sha256=kernel_details["source_sha256"],
         kernel_binary_sha256=kernel_details["binary_sha256"],
         chunk_rows=args.chunk_rows,
@@ -942,18 +974,20 @@ def main(argv: list[str] | None = None) -> int:
             evidence_path,
             {
                 "schema_version": 1,
-                "status": "INCOMPLETE",
-                "verified_rows": aggregate["rows"],
+                "status": "INCOMPLETE_NON_CERTIFYING",
+                "fresh_rows_scanned": aggregate["rows"],
                 "state_count": certificate.state_count,
-                "checkpoint": str(work_dir / "verification-checkpoint.json"),
+                "certifying_resume_supported": False,
+                "progress": str(work_dir / "verification-progress.json"),
             },
         )
         print(
             json.dumps(
                 {
-                    "status": "INCOMPLETE",
-                    "verified_rows": aggregate["rows"],
+                    "status": "INCOMPLETE_NON_CERTIFYING",
+                    "fresh_rows_scanned": aggregate["rows"],
                     "state_count": certificate.state_count,
+                    "certifying_resume_supported": False,
                 },
                 sort_keys=True,
             )
@@ -1020,7 +1054,14 @@ def main(argv: list[str] | None = None) -> int:
         "runtime": {
             "scan_seconds": aggregate["scan_seconds"],
             "invocation_wall_seconds": time.perf_counter() - invocation_started,
-            **resume,
+            **fresh_scan,
+        },
+        "certification": {
+            "all_rows_scanned_current_invocation": True,
+            "cross_invocation_resume_used": False,
+            "cached_chunk_summaries_trusted": False,
+            "kernel_compiled_current_invocation": True,
+            "state_index_built_current_invocation": True,
         },
         "platform": {
             "platform": platform.platform(),
@@ -1030,9 +1071,9 @@ def main(argv: list[str] | None = None) -> int:
         },
         "storage": disk,
         "derived_index": index_details,
-        "checkpoint_chain_sha256": json.loads(
-            (work_dir / "verification-checkpoint.json").read_text(encoding="utf-8")
-        )["chain_sha256"],
+        "invocation_scan_chain_sha256": fresh_scan[
+            "invocation_scan_chain_sha256"
+        ],
         "transition_graph_used": False,
     }
     atomic_json(evidence_path, evidence)

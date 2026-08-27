@@ -22,7 +22,7 @@ from verify_matrix_free import (  # noqa: E402
     Certificate,
     atomic_json,
     compile_kernel,
-    ensure_index,
+    build_fresh_index,
     load_witness,
     run_kernel,
     scan_chunk,
@@ -53,7 +53,7 @@ def run(history: int, threads: int, work_dir: Path) -> dict:
     states = graph_dir / "states.u64"
     state_sha = sha256_file(states)
     kernel, kernel_details = compile_kernel(work_dir)
-    index, capacity, index_details = ensure_index(
+    index, capacity, index_details = build_fresh_index(
         kernel,
         work_dir,
         states,
@@ -61,6 +61,7 @@ def run(history: int, threads: int, work_dir: Path) -> dict:
         state_count=int(graph["state_count"]),
         state_sha256=state_sha,
         kernel_source_sha256=kernel_details["source_sha256"],
+        kernel_binary_sha256=kernel_details["binary_sha256"],
     )
     witness_path = work_dir / "ones-witness.npy"
     np.save(
@@ -95,7 +96,8 @@ def run(history: int, threads: int, work_dir: Path) -> dict:
             str(certificate.state_count),
             str(threads),
             str(dump_path),
-        ]
+        ],
+        executable_sha256=kernel_details["binary_sha256"],
     )
     dump_seconds = time.perf_counter() - dump_started
     if dump_path.read_bytes() != (graph_dir / "transitions.u32").read_bytes():
@@ -112,6 +114,7 @@ def run(history: int, threads: int, work_dir: Path) -> dict:
         start=0,
         end=certificate.state_count,
         threads=threads,
+        kernel_binary_sha256=kernel_details["binary_sha256"],
     )
     transitions = certificate.state_count * certificate.columns
     return {
@@ -144,7 +147,12 @@ def run(history: int, threads: int, work_dir: Path) -> dict:
         "platform": platform.platform(),
         "python": sys.version,
         "compiler": kernel_details["compiler"],
+        "kernel_build_status": kernel_details["status"],
+        "kernel_private_runtime_directory": kernel_details[
+            "private_runtime_directory"
+        ],
         "kernel_source_sha256": kernel_details["source_sha256"],
+        "index_build_status": index_details["status"],
     }
 
 

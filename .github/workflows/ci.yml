@@ -54,7 +54,7 @@ jobs:
       - name: Check POSIX shell syntax
         run: sh -n scripts/fetch_source_paper.sh scripts/fetch_witness.sh
 
-      - name: Run all 56 bounded tests
+      - name: Run all 58 bounded tests
         run: |
           uv run --frozen python -m unittest -v \
             test_upper_engine.py test_upper_oracle.py \

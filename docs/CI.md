@@ -8,7 +8,7 @@ SHA-256 before use.
 
 The bounded job proves that:
 
-- all 56 current unit, contract, clean-clone reproduction, and Path A preflight tests pass;
+- all 58 current unit, contract, clean-clone reproduction, and Path A preflight tests pass;
 - all four C helpers/builders parse and compile under C11 with GCC warnings treated as
   errors, including the supported `unsigned __int128` extension;
 - both repository shell scripts parse as POSIX shell;
@@ -16,8 +16,8 @@ The bounded job proves that:
   transition through h=6 (1,979,120 transitions at h=6), including start-state, uniqueness,
   canonical quotient, successor closure, reachability, and completeness checks;
 - the verifier-owned matrix-free C oracle agrees byte-for-byte with every production-builder
-  transition through h=6, and its corruption, overflow, closure, reject, and checkpoint
-  failure paths are exercised;
+  transition through h=6, and its corruption, overflow, closure, reject, forged-checkpoint,
+  planted-binary, and forged-index-cache failure paths are exercised;
 - the documented Lueker Table II reproduction agrees through h=4; and
 - the figures and manuscript build twice with identical hashes, match the checked-in PDFs,
   parse successfully, contain pages, and expose the expected title and bound as text.

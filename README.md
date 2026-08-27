@@ -52,12 +52,14 @@ The code is already wired to automatically download and authenticate only the sp
 state table and 1.6 GB final witness once URLs and part hashes are published. A user who
 already has the canonical state table can exercise the complete path now with
 `--states /path/to/states.u64`; the published witness still downloads
-automatically. The verifier builds a derived 2 GiB membership index, resumes after
-interruption, checks all transitions and exact integer row inequalities, and writes a small
-machine-readable evidence JSON. The projected envelope is 10 GiB free disk, at least 12 GiB
-RAM (16 GiB recommended), and a sustained multicore CPU run. See
+automatically. On every certifying invocation the verifier freshly compiles its native
+kernel, rebuilds and validates a derived 2 GiB membership index, and scans every transition
+and exact integer row inequality from row zero. Downloads resume after interruption, but an
+exact certification scan intentionally does not trust cross-invocation progress. It writes a
+small machine-readable evidence JSON. The projected envelope is 10 GiB free disk, at least
+12 GiB RAM (16 GiB recommended), and a sustained multicore CPU run. See
 [`docs/MATRIX_FREE_VERIFICATION.md`](docs/MATRIX_FREE_VERIFICATION.md) for the exact
-proof contract, trust boundary, checkpoint behavior, benchmark, and the distinction between
+proof contract, trust boundary, restart behavior, benchmark, and the distinction between
 verification and reproduction, including the explicit deferred items.
 
 ## Dense replay / reproduce (~90 minutes end to end)
@@ -170,7 +172,7 @@ evidence against that failure mode. The full-h10 command exists but has not been
 
 ## Bounded continuous integration
 
-GitHub Actions runs the complete 56-test bounded suite, strict Linux C11 and shell checks,
+GitHub Actions runs the complete 58-test bounded suite, strict Linux C11 and shell checks,
 the independent exhaustive graph/oracle contract through h=6, the Lueker Table II
 reproduction through h=4, and a twice-repeated manuscript build. It never downloads or
 builds the h=10 graph or witness. See [`docs/CI.md`](docs/CI.md) for the exact guarantees

@@ -11,19 +11,24 @@ import numpy as np
 
 from upper_engine import build_graph, sha256_file
 from verify_matrix_free import (
+    KERNEL_SOURCE,
     Certificate,
     KernelError,
     VerificationError,
     authenticate_file,
+    atomic_json,
+    build_fresh_index,
+    canonical_json,
     compile_kernel,
-    ensure_index,
     ensure_state_table,
     exact_power_decision,
     index_capacity,
     load_witness,
     run_kernel,
+    scan_certified_fresh,
     scan_chunk,
-    scan_with_checkpoint,
+    _checkpoint_chain,
+    sha256_bytes,
     upward_weights,
 )
 
@@ -54,7 +59,7 @@ class MatrixFreeVerifierTests(unittest.TestCase):
         witness = root / f"h{history}-witness.npy"
         np.save(witness, witness_values, allow_pickle=False)
         state_sha = sha256_file(states)
-        state_index, capacity, _details = ensure_index(
+        state_index, capacity, _details = build_fresh_index(
             self.kernel,
             root,
             states,
@@ -62,6 +67,7 @@ class MatrixFreeVerifierTests(unittest.TestCase):
             state_count=state_count,
             state_sha256=state_sha,
             kernel_source_sha256=self.kernel_details["source_sha256"],
+            kernel_binary_sha256=self.kernel_details["binary_sha256"],
         )
         certificate = Certificate(
             history=history,
@@ -97,7 +103,8 @@ class MatrixFreeVerifierTests(unittest.TestCase):
                 str(state_count),
                 "4",
                 str(output),
-            ]
+            ],
+            executable_sha256=self.kernel_details["binary_sha256"],
         )
 
     def test_independent_oracle_matches_every_builder_transition_through_h6(self):
@@ -146,6 +153,7 @@ class MatrixFreeVerifierTests(unittest.TestCase):
                 start=0,
                 end=certificate.state_count,
                 threads=2,
+                kernel_binary_sha256=self.kernel_details["binary_sha256"],
             )
             self.assertEqual(result["rows"], certificate.state_count)
             self.assertEqual(
@@ -188,6 +196,7 @@ class MatrixFreeVerifierTests(unittest.TestCase):
                     start=0,
                     end=certificate.state_count,
                     threads=2,
+                    kernel_binary_sha256=self.kernel_details["binary_sha256"],
                 )
             self.assertIsNotNone(raised.exception.result)
             self.assertEqual(raised.exception.result["failure"], expected)
@@ -225,7 +234,7 @@ class MatrixFreeVerifierTests(unittest.TestCase):
             original[:-1].tofile(states)
             count = len(original) - 1
             state_sha = sha256_file(states)
-            state_index, capacity, _details = ensure_index(
+            state_index, capacity, _details = build_fresh_index(
                 self.kernel,
                 root,
                 states,
@@ -233,6 +242,7 @@ class MatrixFreeVerifierTests(unittest.TestCase):
                 state_count=count,
                 state_sha256=state_sha,
                 kernel_source_sha256=self.kernel_details["source_sha256"],
+                kernel_binary_sha256=self.kernel_details["binary_sha256"],
             )
             witness_path = root / "witness.npy"
             np.save(witness_path, np.ones(count, dtype="<u4"), allow_pickle=False)
@@ -253,6 +263,7 @@ class MatrixFreeVerifierTests(unittest.TestCase):
                     start=0,
                     end=count,
                     threads=2,
+                    kernel_binary_sha256=self.kernel_details["binary_sha256"],
                 )
             self.assertEqual(raised.exception.result["failure"], "missing_successor")
             self.assertEqual(manifest["state_count"], 7)
@@ -276,7 +287,7 @@ class MatrixFreeVerifierTests(unittest.TestCase):
                 states = case / "states.u64"
                 values.tofile(states)
                 with self.assertRaises(KernelError):
-                    ensure_index(
+                    build_fresh_index(
                         self.kernel,
                         case,
                         states,
@@ -284,6 +295,7 @@ class MatrixFreeVerifierTests(unittest.TestCase):
                         state_count=len(values),
                         state_sha256=sha256_file(states),
                         kernel_source_sha256=self.kernel_details["source_sha256"],
+                        kernel_binary_sha256=self.kernel_details["binary_sha256"],
                     )
             self.assertEqual(manifest["state_count"], 7)
 
@@ -310,17 +322,18 @@ class MatrixFreeVerifierTests(unittest.TestCase):
                     start=0,
                     end=certificate.state_count,
                     threads=2,
+                    kernel_binary_sha256=self.kernel_details["binary_sha256"],
                 )
             self.assertEqual(raised.exception.result["failure"], "missing_successor")
 
-    def test_checkpoint_resume_covers_a_contiguous_authenticated_prefix(self):
+    def test_certified_scan_restarts_from_zero_and_only_counts_fresh_work(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             _graph, states, state_index, capacity, witness_path, certificate = (
                 self.make_fixture(root)
             )
             witness = np.load(witness_path, mmap_mode="r", allow_pickle=False)
-            checkpoint = root / "checkpoint.json"
+            progress_path = root / "progress.json"
             common = dict(
                 kernel=self.kernel,
                 certificate=certificate,
@@ -332,54 +345,209 @@ class MatrixFreeVerifierTests(unittest.TestCase):
                 witness_sha256=sha256_file(witness_path),
                 witness_offset=witness.offset,
                 weights=[1] * certificate.columns,
-                checkpoint_path=checkpoint,
+                progress_path=progress_path,
                 kernel_source_sha256=self.kernel_details["source_sha256"],
                 kernel_binary_sha256=self.kernel_details["binary_sha256"],
                 chunk_rows=3,
                 threads=2,
             )
-            status, partial, progress = scan_with_checkpoint(
+            status, partial, progress = scan_certified_fresh(
                 **common, stop_after_chunks=1
             )
             self.assertEqual(status, "INCOMPLETE")
             self.assertEqual(partial["rows"], 3)
             self.assertEqual(progress["next_row"], 3)
-            status, complete, progress = scan_with_checkpoint(**common)
+            first_nonce = json.loads(progress_path.read_text(encoding="utf-8"))[
+                "invocation"
+            ]["invocation_nonce"]
+            status, partial_again, progress = scan_certified_fresh(
+                **common, stop_after_chunks=1
+            )
+            self.assertEqual(status, "INCOMPLETE")
+            self.assertEqual(partial_again["rows"], 3)
+            self.assertEqual(progress["fresh_start_row"], 0)
+            self.assertFalse(progress["cross_invocation_resume"])
+            second_nonce = json.loads(progress_path.read_text(encoding="utf-8"))[
+                "invocation"
+            ]["invocation_nonce"]
+            self.assertNotEqual(first_nonce, second_nonce)
+
+            status, complete, progress = scan_certified_fresh(**common)
             self.assertEqual(status, "PASS")
             self.assertEqual(complete["rows"], certificate.state_count)
-            self.assertEqual(progress["resumed_from_row"], 3)
+            self.assertEqual(progress["fresh_start_row"], 0)
+            self.assertEqual(progress["fresh_chunks"], 3)
 
-    def test_checkpoint_corruption_is_rejected(self):
+    def test_forged_full_checkpoint_cannot_bypass_a_missing_native_kernel(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            _graph, states, state_index, capacity, witness_path, certificate = (
-                self.make_fixture(root)
+            certificate = Certificate(
+                10,
+                400_253_317,
+                Fraction(3209, 10000),
+                1464651560,
+                1 << 32,
+                1 << 31,
+                824443,
+                1_000_000,
             )
-            witness = np.load(witness_path, mmap_mode="r", allow_pickle=False)
-            checkpoint = root / "checkpoint.json"
-            common = dict(
-                kernel=self.kernel,
-                certificate=certificate,
-                states=states,
-                state_sha256=sha256_file(states),
-                index=state_index,
-                capacity=capacity,
-                witness=witness_path,
-                witness_sha256=sha256_file(witness_path),
-                witness_offset=witness.offset,
-                weights=[1] * certificate.columns,
-                checkpoint_path=checkpoint,
-                kernel_source_sha256=self.kernel_details["source_sha256"],
-                kernel_binary_sha256=self.kernel_details["binary_sha256"],
-                chunk_rows=3,
-                threads=2,
+            weights = [1] * certificate.columns
+            state_sha = "11" * 32
+            witness_sha = "22" * 32
+            source_sha = "33" * 32
+            binary_sha = "44" * 32
+            capacity = 1 << 29
+            former_immutable = {
+                "history": certificate.history,
+                "state_count": certificate.state_count,
+                "columns": certificate.columns,
+                "state_sha256": state_sha,
+                "witness_sha256": witness_sha,
+                "witness_offset": 128,
+                "index_capacity": capacity,
+                "weights": weights,
+                "lambda_numerator": certificate.lambda_numerator,
+                "lambda_denominator": certificate.lambda_denominator,
+                "witness_scale": certificate.witness_scale,
+                "chunk_rows": certificate.state_count,
+                "kernel_source_sha256": source_sha,
+                "kernel_binary_sha256": binary_sha,
+            }
+            forged_chunk = {
+                "start_row": 0,
+                "end_row": certificate.state_count,
+                "rows": certificate.state_count,
+                "accepted_transitions": certificate.state_count
+                * certificate.columns,
+                "rejected_transitions": 0,
+                "maximum_ceiling": 1464651560,
+                "minimum_floor": 1464649541,
+                "raw_maximum": 3145313150651095756,
+                "witness_minimum": 9834007,
+                "witness_maximum": 2147483648,
+                "peak_rss_bytes": 1,
+                "scan_seconds": 1.0,
+            }
+            chain = sha256_bytes(canonical_json(former_immutable).encode())
+            forged_chunk["chain_sha256"] = _checkpoint_chain(chain, forged_chunk)
+            progress_path = root / "forged-checkpoint.json"
+            atomic_json(
+                progress_path,
+                {
+                    "schema_version": 1,
+                    "kind": "matrix-free-verification-checkpoint",
+                    "immutable": former_immutable,
+                    "chunks": [forged_chunk],
+                    "chain_sha256": forged_chunk["chain_sha256"],
+                },
             )
-            scan_with_checkpoint(**common, stop_after_chunks=1)
-            payload = json.loads(checkpoint.read_text(encoding="utf-8"))
-            payload["chunks"][0]["rows"] = 2
-            checkpoint.write_text(json.dumps(payload), encoding="utf-8")
-            with self.assertRaises(VerificationError):
-                scan_with_checkpoint(**common)
+
+            with self.assertRaisesRegex(VerificationError, "native verifier is absent"):
+                scan_certified_fresh(
+                    root / "native-kernel-does-not-exist",
+                    certificate=certificate,
+                    states=root / "states-do-not-exist",
+                    state_sha256=state_sha,
+                    index=root / "index-does-not-exist",
+                    capacity=capacity,
+                    witness=root / "witness-does-not-exist",
+                    witness_sha256=witness_sha,
+                    witness_offset=128,
+                    weights=weights,
+                    progress_path=progress_path,
+                    kernel_source_sha256=source_sha,
+                    kernel_binary_sha256=binary_sha,
+                    chunk_rows=certificate.state_count,
+                    threads=1,
+                )
+            overwritten = json.loads(progress_path.read_text(encoding="utf-8"))
+            self.assertEqual(overwritten["schema_version"], 2)
+            self.assertEqual(overwritten["chunks"], [])
+            self.assertFalse(overwritten["certifying_resume_supported"])
+
+    def test_preplaced_source_named_executable_is_never_trusted(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_sha = sha256_file(KERNEL_SOURCE)
+            planted = root / "cache" / f"upper_matrix_free-{source_sha[:16]}"
+            planted.parent.mkdir()
+            planted.write_text(
+                "#!/bin/sh\nprintf '%s\\n' '{\"status\":\"PASS\"}'\n",
+                encoding="utf-8",
+            )
+            planted.chmod(0o700)
+
+            kernel, details = compile_kernel(root)
+
+            self.assertNotEqual(kernel, planted)
+            self.assertEqual(details["status"], "COMPILED_FRESH")
+            self.assertTrue(details["private_runtime_directory"])
+            self.assertEqual(kernel.parent.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(sha256_file(kernel), details["binary_sha256"])
+            with self.assertRaises(KernelError):
+                run_kernel([str(kernel)], executable_sha256=details["binary_sha256"])
+
+    def test_forged_index_cache_cannot_bypass_global_state_validation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            graph = root / "graph"
+            build_graph(2, graph)
+            original = np.fromfile(graph / "states.u64", dtype="<u8")
+            existing = {int(value) for value in original}
+            replacement = next(
+                value
+                for value in range(1 << 8)
+                if value & 3 < 2 and value not in existing
+            )
+            cases = {
+                "missing-initial": np.concatenate(
+                    (original[1:], np.asarray([replacement], dtype="<u8"))
+                ),
+                "duplicate": np.concatenate((original[:-1], original[1:2])),
+            }
+            for name, values in cases.items():
+                with self.subTest(name=name):
+                    case = root / name
+                    case.mkdir()
+                    states = case / "states.u64"
+                    values.tofile(states)
+                    state_sha = sha256_file(states)
+                    capacity = index_capacity(len(values))
+                    cache = case / "cache"
+                    cache.mkdir()
+                    index = cache / f"states-{state_sha[:16]}-{capacity}.index.u32"
+                    np.zeros(capacity, dtype="<u4").tofile(index)
+                    metadata = {
+                        "schema_version": 1,
+                        "kind": "matrix-free-keyless-state-index",
+                        "history": 2,
+                        "state_count": len(values),
+                        "state_sha256": state_sha,
+                        "capacity": capacity,
+                        "bytes": capacity * 4,
+                        "kernel_source_sha256": self.kernel_details[
+                            "source_sha256"
+                        ],
+                        "kernel_binary_sha256": self.kernel_details[
+                            "binary_sha256"
+                        ],
+                    }
+                    atomic_json(index.with_suffix(".json"), metadata)
+                    with self.assertRaises(KernelError):
+                        build_fresh_index(
+                            self.kernel,
+                            case,
+                            states,
+                            history=2,
+                            state_count=len(values),
+                            state_sha256=state_sha,
+                            kernel_source_sha256=self.kernel_details[
+                                "source_sha256"
+                            ],
+                            kernel_binary_sha256=self.kernel_details[
+                                "binary_sha256"
+                            ],
+                        )
 
     def test_artifact_hash_and_npy_format_corruption_are_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
